@@ -1,0 +1,8 @@
+[package]
+name = "pork-proto"
+version = "0.1.0"
+edition = "2024"
+authors = ["Lewin Probst <info@emirror.de>"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }

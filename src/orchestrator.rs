@@ -15,6 +15,7 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 use ipc_channel::ipc::{IpcOneShotServer, IpcReceiver, IpcSender};
+use pork_proto::{PorkControlMessage, PorkIpcMessage};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
 use crate::error::{OrchestratorError, ProcessId, Result};
@@ -33,6 +34,7 @@ pub struct ProcessOrchestrator {
 struct OrchestratorInner {
     next_process_id: AtomicU64,
     message_buffer_size: usize,
+    graceful_shutdown_timeout: Duration,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
     process_names: Mutex<HashMap<String, ProcessId>>,
 }
@@ -53,18 +55,27 @@ impl Default for ProcessOrchestrator {
 
 impl ProcessOrchestrator {
     pub fn new() -> Self {
-        Self::with_message_buffer_size(DEFAULT_MESSAGE_BUFFER_SIZE)
+        Self::builder().build()
     }
 
     pub fn with_message_buffer_size(message_buffer_size: usize) -> Self {
-        Self {
-            inner: Arc::new(OrchestratorInner {
-                next_process_id: AtomicU64::new(1),
-                message_buffer_size,
-                processes: Mutex::new(HashMap::new()),
-                process_names: Mutex::new(HashMap::new()),
-            }),
-        }
+        Self::builder()
+            .message_buffer_size(message_buffer_size)
+            .build()
+    }
+
+    pub fn with_graceful_shutdown_timeout(graceful_shutdown_timeout: Duration) -> Self {
+        Self::builder()
+            .graceful_shutdown_timeout(graceful_shutdown_timeout)
+            .build()
+    }
+
+    pub fn builder() -> ProcessOrchestratorBuilder {
+        ProcessOrchestratorBuilder::default()
+    }
+
+    pub fn graceful_shutdown_timeout(&self) -> Duration {
+        self.inner.graceful_shutdown_timeout
     }
 
     pub fn start_process(&self, spec: ProcessSpec) -> Result<ManagedChild> {
@@ -180,7 +191,7 @@ impl ProcessOrchestrator {
     }
 
     pub fn graceful_shutdown_process(&self, process_id: ProcessId) -> Result<ExitStatus> {
-        self.graceful_shutdown_process_with_timeout(process_id, DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT)
+        self.graceful_shutdown_process_with_timeout(process_id, self.graceful_shutdown_timeout())
     }
 
     pub fn graceful_shutdown_process_with_timeout(
@@ -206,7 +217,11 @@ impl ProcessOrchestrator {
     }
 
     fn request_ipc_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
-        self.send(process_id, crate::graceful_shutdown_message())
+        let control_message =
+            PorkIpcMessage::<Vec<u8>>::Control(PorkControlMessage::GracefulShutdown);
+        let payload = serde_json::to_vec(&control_message)
+            .map_err(|error| OrchestratorError::Io(std::io::Error::other(error)))?;
+        self.send(process_id, payload)
     }
 
     #[cfg(unix)]
@@ -343,6 +358,45 @@ impl ProcessOrchestrator {
             .lock()
             .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
         Ok(process_names.keys().cloned().collect())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessOrchestratorBuilder {
+    message_buffer_size: usize,
+    graceful_shutdown_timeout: Duration,
+}
+
+impl Default for ProcessOrchestratorBuilder {
+    fn default() -> Self {
+        Self {
+            message_buffer_size: DEFAULT_MESSAGE_BUFFER_SIZE,
+            graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
+        }
+    }
+}
+
+impl ProcessOrchestratorBuilder {
+    pub fn message_buffer_size(mut self, value: usize) -> Self {
+        self.message_buffer_size = value;
+        self
+    }
+
+    pub fn graceful_shutdown_timeout(mut self, value: Duration) -> Self {
+        self.graceful_shutdown_timeout = value;
+        self
+    }
+
+    pub fn build(self) -> ProcessOrchestrator {
+        ProcessOrchestrator {
+            inner: Arc::new(OrchestratorInner {
+                next_process_id: AtomicU64::new(1),
+                message_buffer_size: self.message_buffer_size,
+                graceful_shutdown_timeout: self.graceful_shutdown_timeout,
+                processes: Mutex::new(HashMap::new()),
+                process_names: Mutex::new(HashMap::new()),
+            }),
+        }
     }
 }
 

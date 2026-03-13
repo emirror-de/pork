@@ -342,8 +342,17 @@ dependencies = [
  "interprocess",
  "ipc-channel",
  "nix",
+ "pork-proto",
  "serde",
+ "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "pork-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

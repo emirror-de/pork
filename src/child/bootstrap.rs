@@ -1,9 +1,8 @@
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
+use pork_proto::{PorkControlMessage, PorkIpcMessage};
 
 use crate::error::{OrchestratorError, Result};
 use crate::ipc::HandshakeChannels;
-
-pub const GRACEFUL_SHUTDOWN_MESSAGE: &[u8] = b"__PORK_GRACEFUL_SHUTDOWN__";
 
 pub fn child_bootstrap_env_value(env_name: &str) -> Result<String> {
     std::env::var(env_name).map_err(|_| OrchestratorError::MissingBootstrapValue)
@@ -33,9 +32,19 @@ pub fn child_connect(bootstrap_value: &str) -> Result<(IpcReceiver<Vec<u8>>, Ipc
 }
 
 pub fn is_graceful_shutdown_message(message: &[u8]) -> bool {
-    message == GRACEFUL_SHUTDOWN_MESSAGE
+    serde_json::from_slice::<PorkIpcMessage<Vec<u8>>>(message)
+        .map(|message| {
+            matches!(
+                message,
+                PorkIpcMessage::Control(PorkControlMessage::GracefulShutdown)
+            )
+        })
+        .unwrap_or(false)
 }
 
 pub fn graceful_shutdown_message() -> Vec<u8> {
-    GRACEFUL_SHUTDOWN_MESSAGE.to_vec()
+    serde_json::to_vec(&PorkIpcMessage::<Vec<u8>>::Control(
+        PorkControlMessage::GracefulShutdown,
+    ))
+    .expect("serializing graceful shutdown control message should never fail")
 }
