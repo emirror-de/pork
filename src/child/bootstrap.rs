@@ -1,5 +1,4 @@
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
-use pork_proto::{PorkControlMessage, PorkProtoCodecError};
 
 use crate::error::{OrchestratorError, Result};
 use crate::ipc::HandshakeChannels;
@@ -38,29 +37,4 @@ pub fn child_connect(bootstrap_value: &str) -> Result<(IpcReceiver<Vec<u8>>, Ipc
 
     bootstrap_sender.send(handshake)?;
     Ok((to_child_receiver, from_child_sender))
-}
-
-pub fn is_graceful_shutdown_message(message: &[u8], codec: PorkControlCodec) -> bool {
-    decode_control_message(message, codec)
-        .map(|message| matches!(message, PorkControlMessage::GracefulShutdown))
-        .unwrap_or(false)
-}
-
-pub fn graceful_shutdown_message(codec: PorkControlCodec) -> Vec<u8> {
-    encode_control_message(PorkControlMessage::GracefulShutdown, codec)
-        .expect("serializing graceful shutdown control message should never fail")
-}
-
-pub fn encode_control_message(
-    message: PorkControlMessage,
-    codec: PorkControlCodec,
-) -> std::result::Result<Vec<u8>, PorkProtoCodecError> {
-    codec.encode_control_message(message)
-}
-
-pub fn decode_control_message(
-    bytes: &[u8],
-    codec: PorkControlCodec,
-) -> std::result::Result<PorkControlMessage, PorkProtoCodecError> {
-    codec.decode_control_message(bytes)
 }
