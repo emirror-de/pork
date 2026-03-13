@@ -1,14 +1,12 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+mod child;
+mod error;
+mod ipc;
+mod orchestrator;
+mod spec;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use child::{child_bootstrap_env_value, child_connect, child_connect_from_env};
+pub use error::{OrchestratorError, ProcessId, Result};
+pub use orchestrator::{ManagedChild, ProcessOrchestrator};
+pub use spec::ProcessSpec;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub const DEFAULT_BOOTSTRAP_ENV: &str = "PORK_IPC_BOOTSTRAP";
