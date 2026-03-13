@@ -4,10 +4,18 @@ use crate::error::{OrchestratorError, Result};
 use crate::ipc::HandshakeChannels;
 use crate::{PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec};
 
+/// Reads the child bootstrap value from the given environment variable.
+///
+/// This is typically used inside a managed child process to retrieve the
+/// one-shot IPC server name that the parent injected before spawning it.
 pub fn child_bootstrap_env_value(env_name: &str) -> Result<String> {
     std::env::var(env_name).map_err(|_| OrchestratorError::MissingBootstrapValue)
 }
 
+/// Resolves the control codec for the current child process from the environment.
+///
+/// The parent process sets [`PORK_CONTROL_CODEC_ENV`] before spawn so the child
+/// can decode framework control messages with the same codec.
 pub fn child_control_codec_from_env() -> Result<PorkControlCodec> {
     let value = std::env::var(PORK_CONTROL_CODEC_ENV)
         .map_err(|_| OrchestratorError::MissingControlCodec)?;
@@ -16,6 +24,12 @@ pub fn child_control_codec_from_env() -> Result<PorkControlCodec> {
     })
 }
 
+/// Connects a child process back to the parent using a bootstrap value stored in
+/// the provided environment variable.
+///
+/// On success, returns `(from_host, to_host)` where:
+/// - `from_host` receives raw messages sent by the parent
+/// - `to_host` sends raw messages back to the parent
 pub fn child_connect_from_env(
     env_name: &str,
 ) -> Result<(IpcReceiver<Vec<u8>>, IpcSender<Vec<u8>>)> {
@@ -23,6 +37,15 @@ pub fn child_connect_from_env(
     child_connect(&bootstrap_value)
 }
 
+/// Connects a child process back to the parent using an explicit bootstrap value.
+///
+/// This performs the Pork child-side handshake by connecting to the parent's
+/// one-shot bootstrap server, creating the two message channels, and sending the
+/// handshake payload back to the parent.
+///
+/// On success, returns `(from_host, to_host)` where:
+/// - `from_host` receives raw messages sent by the parent
+/// - `to_host` sends raw messages back to the parent
 pub fn child_connect(bootstrap_value: &str) -> Result<(IpcReceiver<Vec<u8>>, IpcSender<Vec<u8>>)> {
     let bootstrap_sender: IpcSender<HandshakeChannels> =
         IpcSender::connect(bootstrap_value.to_owned())?;

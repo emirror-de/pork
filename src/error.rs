@@ -2,19 +2,32 @@ use std::fmt;
 
 use ipc_channel::IpcError;
 
+/// Convenience result type used throughout the `pork` orchestration API.
 pub type Result<T> = std::result::Result<T, OrchestratorError>;
+
+/// Stable identifier assigned to a managed child process.
 pub type ProcessId = u64;
 
+/// Errors returned by process orchestration, bootstrap, and IPC operations.
 #[derive(Debug)]
 pub enum OrchestratorError {
+    /// An I/O operation failed while spawning, stopping, or signaling a child process.
     Io(std::io::Error),
+    /// An IPC channel operation failed.
     Ipc(IpcError),
+    /// No managed process exists for the given process ID.
     ProcessNotFound(ProcessId),
+    /// No managed process exists for the given process name.
     ProcessNameNotFound(String),
+    /// A process was started with a name that is already registered.
     DuplicateProcessName(String),
+    /// The child process could not read its bootstrap environment variable.
     MissingBootstrapValue,
+    /// The child process could not read the control codec environment variable.
     MissingControlCodec,
+    /// The configured control codec value is not supported.
     UnsupportedControlCodec(String),
+    /// Internal shared state was poisoned by a panic while holding a lock.
     LockPoisoned(&'static str),
 }
 

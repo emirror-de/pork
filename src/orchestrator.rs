@@ -23,6 +23,11 @@ use crate::{PORK_CONTROL_CODEC_ENV, PorkControlCodec, ProcessSpec};
 const DEFAULT_MESSAGE_BUFFER_SIZE: usize = 1024;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Coordinates child-process startup, messaging, lookup, restart, and shutdown.
+///
+/// A `ProcessOrchestrator` owns the parent side of the bootstrap handshake and
+/// keeps track of running managed processes by both numeric id and optional
+/// managed name.
 #[derive(Debug, Clone)]
 pub struct ProcessOrchestrator {
     inner: Arc<OrchestratorInner>,
@@ -54,34 +59,53 @@ impl Default for ProcessOrchestrator {
 }
 
 impl ProcessOrchestrator {
+    /// Creates an orchestrator with the default buffer size and graceful-shutdown timeout.
     pub fn new() -> Self {
         Self::builder().build()
     }
 
+    /// Creates an orchestrator with a custom inbound message buffer size.
+    ///
+    /// This controls the size of the Tokio channel used to forward child-to-host
+    /// messages from the IPC receiver thread into async code.
     pub fn with_message_buffer_size(message_buffer_size: usize) -> Self {
         Self::builder()
             .message_buffer_size(message_buffer_size)
             .build()
     }
 
+    /// Creates an orchestrator with a custom graceful-shutdown timeout.
+    ///
+    /// The timeout is used by [`Self::graceful_shutdown_process`] and the
+    /// corresponding convenience methods on [`ManagedChild`].
     pub fn with_graceful_shutdown_timeout(graceful_shutdown_timeout: Duration) -> Self {
         Self::builder()
             .graceful_shutdown_timeout(graceful_shutdown_timeout)
             .build()
     }
 
+    /// Returns a builder for configuring a [`ProcessOrchestrator`].
     pub fn builder() -> ProcessOrchestratorBuilder {
         ProcessOrchestratorBuilder::default()
     }
 
+    /// Returns the default timeout used for graceful shutdown operations.
     pub fn graceful_shutdown_timeout(&self) -> Duration {
         self.inner.graceful_shutdown_timeout
     }
 
+    /// Starts a new managed child process from the given [`ProcessSpec`].
+    ///
+    /// On success, returns a [`ManagedChild`] handle that can be used for
+    /// messaging and lifecycle operations.
     pub fn start_process(&self, spec: ProcessSpec) -> Result<ManagedChild> {
         self.start_process_inner(spec, true)
     }
 
+    /// Restarts an existing managed process by numeric id.
+    ///
+    /// This first performs a graceful shutdown using the orchestrator's default
+    /// timeout and then starts a new process using the original [`ProcessSpec`].
     pub fn restart_process(&self, process_id: ProcessId) -> Result<ManagedChild> {
         let spec = {
             let processes = self
@@ -99,6 +123,10 @@ impl ProcessOrchestrator {
         self.start_process_inner(spec, false)
     }
 
+    /// Restarts an existing managed process by numeric id using an explicit timeout.
+    ///
+    /// This first performs a graceful shutdown with `timeout` and then starts a
+    /// new process using the original [`ProcessSpec`].
     pub fn restart_process_with_timeout(
         &self,
         process_id: ProcessId,
@@ -120,6 +148,7 @@ impl ProcessOrchestrator {
         self.start_process_inner(spec, false)
     }
 
+    /// Restarts an existing managed process by its managed name.
     pub fn restart_process_by_name(&self, name: &str) -> Result<ManagedChild> {
         let process_id = self
             .process_id_by_name(name)?
@@ -232,6 +261,7 @@ impl ProcessOrchestrator {
         start_result
     }
 
+    /// Sends a raw IPC payload to the managed process identified by `process_id`.
     pub fn send(&self, process_id: ProcessId, message: Vec<u8>) -> Result<()> {
         let sender = {
             let processes = self
@@ -249,16 +279,25 @@ impl ProcessOrchestrator {
         Ok(())
     }
 
+    /// Requests a graceful shutdown for the managed process identified by `process_id`.
+    ///
+    /// This sends the shared Pork control message over IPC and, on Unix, also
+    /// sends `SIGTERM` to the process.
     pub fn request_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
         self.request_ipc_graceful_shutdown(process_id)?;
         self.request_unix_graceful_shutdown(process_id)?;
         Ok(())
     }
 
+    /// Gracefully shuts down a managed process using the orchestrator's default timeout.
     pub fn graceful_shutdown_process(&self, process_id: ProcessId) -> Result<ExitStatus> {
         self.graceful_shutdown_process_with_timeout(process_id, self.graceful_shutdown_timeout())
     }
 
+    /// Gracefully shuts down a managed process using an explicit timeout.
+    ///
+    /// If the child does not exit before the timeout expires, the process is
+    /// forcibly stopped.
     pub fn graceful_shutdown_process_with_timeout(
         &self,
         process_id: ProcessId,
@@ -326,6 +365,10 @@ impl ProcessOrchestrator {
         Ok(())
     }
 
+    /// Immediately stops a managed process.
+    ///
+    /// This removes the process from the orchestrator, attempts to kill it, waits
+    /// for the child to exit, and then cleans up background forwarding state.
     pub fn stop_process(&self, process_id: ProcessId) -> Result<ExitStatus> {
         let mut entry = {
             let mut processes = self
@@ -389,6 +432,7 @@ impl ProcessOrchestrator {
         Ok(status)
     }
 
+    /// Checks whether the managed child has already exited without blocking.
     pub fn try_wait(&self, process_id: ProcessId) -> Result<Option<ExitStatus>> {
         let mut processes = self
             .inner
@@ -401,6 +445,7 @@ impl ProcessOrchestrator {
         Ok(entry.child.try_wait()?)
     }
 
+    /// Returns the ids of all currently managed processes.
     pub fn process_ids(&self) -> Result<Vec<ProcessId>> {
         let processes = self
             .inner
@@ -410,6 +455,7 @@ impl ProcessOrchestrator {
         Ok(processes.keys().copied().collect())
     }
 
+    /// Looks up a managed process id by name.
     pub fn process_id_by_name(&self, name: &str) -> Result<Option<ProcessId>> {
         let process_names = self
             .inner
@@ -419,6 +465,7 @@ impl ProcessOrchestrator {
         Ok(process_names.get(name).copied())
     }
 
+    /// Returns `true` when a managed process with the given name exists.
     pub fn has_process_name(&self, name: &str) -> Result<bool> {
         let process_names = self
             .inner
@@ -428,6 +475,7 @@ impl ProcessOrchestrator {
         Ok(process_names.contains_key(name))
     }
 
+    /// Returns the managed names currently registered with the orchestrator.
     pub fn process_names(&self) -> Result<Vec<String>> {
         let process_names = self
             .inner
@@ -438,6 +486,7 @@ impl ProcessOrchestrator {
     }
 }
 
+/// Builder for configuring a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
 pub struct ProcessOrchestratorBuilder {
     message_buffer_size: usize,
@@ -454,16 +503,19 @@ impl Default for ProcessOrchestratorBuilder {
 }
 
 impl ProcessOrchestratorBuilder {
+    /// Sets the size of the async buffer used for inbound child messages.
     pub fn message_buffer_size(mut self, value: usize) -> Self {
         self.message_buffer_size = value;
         self
     }
 
+    /// Sets the default timeout used for graceful shutdown operations.
     pub fn graceful_shutdown_timeout(mut self, value: Duration) -> Self {
         self.graceful_shutdown_timeout = value;
         self
     }
 
+    /// Builds a [`ProcessOrchestrator`] from the current builder configuration.
     pub fn build(self) -> ProcessOrchestrator {
         ProcessOrchestrator {
             inner: Arc::new(OrchestratorInner {
