@@ -10,6 +10,7 @@ pub enum OrchestratorError {
     Io(std::io::Error),
     Ipc(IpcError),
     ProcessNotFound(ProcessId),
+    DuplicateProcessName(String),
     MissingBootstrapValue,
     LockPoisoned(&'static str),
 }
@@ -20,6 +21,9 @@ impl fmt::Display for OrchestratorError {
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Ipc(error) => write!(f, "ipc error: {error}"),
             Self::ProcessNotFound(process_id) => write!(f, "process not found: {process_id}"),
+            Self::DuplicateProcessName(name) => {
+                write!(f, "managed process with name '{name}' already exists")
+            }
             Self::MissingBootstrapValue => write!(f, "missing bootstrap environment value"),
             Self::LockPoisoned(name) => write!(f, "lock poisoned: {name}"),
         }

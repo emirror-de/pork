@@ -10,6 +10,7 @@ use crate::error::{ProcessId, Result};
 #[derive(Debug, Clone)]
 pub struct ManagedChild {
     process_id: ProcessId,
+    name: Option<String>,
     sender: IpcSender<Vec<u8>>,
     receiver: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
     orchestrator: ProcessOrchestrator,
@@ -18,12 +19,14 @@ pub struct ManagedChild {
 impl ManagedChild {
     pub(crate) fn new(
         process_id: ProcessId,
+        name: Option<String>,
         sender: IpcSender<Vec<u8>>,
         receiver: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
         orchestrator: ProcessOrchestrator,
     ) -> Self {
         Self {
             process_id,
+            name,
             sender,
             receiver,
             orchestrator,
@@ -32,6 +35,10 @@ impl ManagedChild {
 
     pub fn id(&self) -> ProcessId {
         self.process_id
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     pub fn send(&self, message: Vec<u8>) -> Result<()> {

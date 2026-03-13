@@ -6,6 +6,7 @@ use crate::DEFAULT_BOOTSTRAP_ENV;
 #[derive(Debug, Clone)]
 pub struct ProcessSpec {
     pub(crate) executable: PathBuf,
+    pub(crate) managed_name: Option<String>,
     pub(crate) args: Vec<String>,
     pub(crate) current_dir: Option<PathBuf>,
     pub(crate) env: HashMap<String, String>,
@@ -18,6 +19,7 @@ impl ProcessSpec {
     pub fn new(executable: impl Into<PathBuf>) -> Self {
         Self {
             executable: executable.into(),
+            managed_name: None,
             args: Vec::new(),
             current_dir: None,
             env: HashMap::new(),
@@ -25,6 +27,16 @@ impl ProcessSpec {
             capture_stdout: false,
             capture_stderr: false,
         }
+    }
+
+    pub fn managed_name(mut self, value: impl Into<String>) -> Self {
+        self.managed_name = Some(value.into());
+        self
+    }
+
+    pub fn without_managed_name(mut self) -> Self {
+        self.managed_name = None;
+        self
     }
 
     pub fn arg(mut self, value: impl Into<String>) -> Self {

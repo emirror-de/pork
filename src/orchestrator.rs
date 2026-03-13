@@ -27,6 +27,7 @@ struct OrchestratorInner {
     next_process_id: AtomicU64,
     message_buffer_size: usize,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    process_names: Mutex<HashMap<String, ProcessId>>,
 }
 
 #[derive(Debug)]
@@ -34,6 +35,7 @@ struct ProcessEntry {
     child: Child,
     sender: IpcSender<Vec<u8>>,
     inbound_thread: Option<JoinHandle<()>>,
+    managed_name: Option<String>,
 }
 
 impl Default for ProcessOrchestrator {
@@ -53,66 +55,98 @@ impl ProcessOrchestrator {
                 next_process_id: AtomicU64::new(1),
                 message_buffer_size,
                 processes: Mutex::new(HashMap::new()),
+                process_names: Mutex::new(HashMap::new()),
             }),
         }
     }
 
     pub fn start_process(&self, spec: ProcessSpec) -> Result<ManagedChild> {
+        let managed_name = spec.managed_name.clone();
         let process_id = self.inner.next_process_id.fetch_add(1, Ordering::Relaxed);
 
-        let (bootstrap_server, bootstrap_name) = IpcOneShotServer::<HandshakeChannels>::new()?;
+        if let Some(process_name) = &managed_name {
+            let mut process_names = self
+                .inner
+                .process_names
+                .lock()
+                .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
 
-        let mut command = Command::new(&spec.executable);
-        command.args(&spec.args);
+            if process_names.contains_key(process_name) {
+                return Err(OrchestratorError::DuplicateProcessName(
+                    process_name.clone(),
+                ));
+            }
 
-        if let Some(current_dir) = &spec.current_dir {
-            command.current_dir(current_dir);
+            process_names.insert(process_name.clone(), process_id);
         }
 
-        for (key, value) in &spec.env {
-            command.env(key, value);
+        let start_result = (|| -> Result<ManagedChild> {
+            let (bootstrap_server, bootstrap_name) = IpcOneShotServer::<HandshakeChannels>::new()?;
+
+            let mut command = Command::new(&spec.executable);
+            command.args(&spec.args);
+
+            if let Some(current_dir) = &spec.current_dir {
+                command.current_dir(current_dir);
+            }
+
+            for (key, value) in &spec.env {
+                command.env(key, value);
+            }
+
+            command.env(&spec.bootstrap_env, bootstrap_name);
+
+            if spec.capture_stdout {
+                command.stdout(Stdio::piped());
+            }
+
+            if spec.capture_stderr {
+                command.stderr(Stdio::piped());
+            }
+
+            let child = command.spawn()?;
+            let (_, handshake) = bootstrap_server.accept()?;
+
+            let sender = handshake.to_child;
+            let receiver = handshake.from_child;
+
+            let (message_tx, message_rx) = mpsc::channel(self.inner.message_buffer_size);
+            let inbound_thread = spawn_forwarder_thread(receiver, message_tx);
+
+            let managed_child = ManagedChild::new(
+                process_id,
+                managed_name.clone(),
+                sender.clone(),
+                Arc::new(AsyncMutex::new(message_rx)),
+                self.clone(),
+            );
+
+            let entry = ProcessEntry {
+                child,
+                sender,
+                inbound_thread: Some(inbound_thread),
+                managed_name: managed_name.clone(),
+            };
+
+            let mut processes = self
+                .inner
+                .processes
+                .lock()
+                .map_err(|_| OrchestratorError::LockPoisoned("processes"))?;
+            processes.insert(process_id, entry);
+
+            Ok(managed_child)
+        })();
+
+        if start_result.is_err() {
+            if let Some(process_name) = &managed_name {
+                if let Ok(mut process_names) = self.inner.process_names.lock() {
+                    process_names.remove(process_name);
+                }
+            }
         }
 
-        command.env(&spec.bootstrap_env, bootstrap_name);
-
-        if spec.capture_stdout {
-            command.stdout(Stdio::piped());
-        }
-
-        if spec.capture_stderr {
-            command.stderr(Stdio::piped());
-        }
-
-        let child = command.spawn()?;
-        let (_, handshake) = bootstrap_server.accept()?;
-
-        let sender = handshake.to_child;
-        let receiver = handshake.from_child;
-
-        let (message_tx, message_rx) = mpsc::channel(self.inner.message_buffer_size);
-        let inbound_thread = spawn_forwarder_thread(receiver, message_tx);
-
-        let managed_child = ManagedChild::new(
-            process_id,
-            sender.clone(),
-            Arc::new(AsyncMutex::new(message_rx)),
-            self.clone(),
-        );
-
-        let entry = ProcessEntry {
-            child,
-            sender,
-            inbound_thread: Some(inbound_thread),
-        };
-
-        let mut processes = self
-            .inner
-            .processes
-            .lock()
-            .map_err(|_| OrchestratorError::LockPoisoned("processes"))?;
-        processes.insert(process_id, entry);
-
-        Ok(managed_child)
+        start_result
     }
 
     pub fn send(&self, process_id: ProcessId, message: Vec<u8>) -> Result<()> {
@@ -151,6 +185,15 @@ impl ProcessOrchestrator {
             let _ = handle.join();
         }
 
+        if let Some(process_name) = &entry.managed_name {
+            let mut process_names = self
+                .inner
+                .process_names
+                .lock()
+                .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
+            process_names.remove(process_name);
+        }
+
         Ok(status)
     }
 
@@ -173,6 +216,33 @@ impl ProcessOrchestrator {
             .lock()
             .map_err(|_| OrchestratorError::LockPoisoned("processes"))?;
         Ok(processes.keys().copied().collect())
+    }
+
+    pub fn process_id_by_name(&self, name: &str) -> Result<Option<ProcessId>> {
+        let process_names = self
+            .inner
+            .process_names
+            .lock()
+            .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
+        Ok(process_names.get(name).copied())
+    }
+
+    pub fn has_process_name(&self, name: &str) -> Result<bool> {
+        let process_names = self
+            .inner
+            .process_names
+            .lock()
+            .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
+        Ok(process_names.contains_key(name))
+    }
+
+    pub fn process_names(&self) -> Result<Vec<String>> {
+        let process_names = self
+            .inner
+            .process_names
+            .lock()
+            .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
+        Ok(process_names.keys().cloned().collect())
     }
 }
 
