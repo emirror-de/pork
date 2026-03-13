@@ -7,5 +7,6 @@ authors = ["Lewin Probst <info@emirror.de>"]
 [dependencies]
 interprocess = { version = "2.4.0", features = ["async"] }
 ipc-channel = { version = "0.21.0", features = ["async"] }
+nix = { version = "0.29.0", features = ["signal"] }
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.50.0", features = ["full"] }

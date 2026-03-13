@@ -1,5 +1,6 @@
 use std::process::ExitStatus;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ipc_channel::ipc::IpcSender;
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
@@ -49,6 +50,15 @@ impl ManagedChild {
     pub async fn recv(&self) -> Option<Vec<u8>> {
         let mut receiver = self.receiver.lock().await;
         receiver.recv().await
+    }
+
+    pub fn shutdown(&self) -> Result<ExitStatus> {
+        self.orchestrator.graceful_shutdown_process(self.process_id)
+    }
+
+    pub fn shutdown_with_timeout(&self, timeout: Duration) -> Result<ExitStatus> {
+        self.orchestrator
+            .graceful_shutdown_process_with_timeout(self.process_id, timeout)
     }
 
     pub fn stop(&self) -> Result<ExitStatus> {
