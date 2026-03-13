@@ -11,7 +11,6 @@ members = ["pork-proto"]
 interprocess = { version = "2.4.0", features = ["async"] }
 ipc-channel = { version = "0.21.0", features = ["async"] }
 nix = { version = "0.29.0", features = ["signal"] }
-pork-proto = { path = "pork-proto" }
+pork-proto = { path = "pork-proto", features = ["codec-json", "codec-postcard"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 tokio = { version = "1.50.0", features = ["full"] }

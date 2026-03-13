@@ -61,6 +61,15 @@ impl ManagedChild {
             .graceful_shutdown_process_with_timeout(self.process_id, timeout)
     }
 
+    pub fn restart(&self) -> Result<Self> {
+        self.orchestrator.restart_process(self.process_id)
+    }
+
+    pub fn restart_with_timeout(&self, timeout: Duration) -> Result<Self> {
+        self.orchestrator
+            .restart_process_with_timeout(self.process_id, timeout)
+    }
+
     pub fn stop(&self) -> Result<ExitStatus> {
         self.orchestrator.stop_process(self.process_id)
     }

@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use pork_proto::PorkControlCodec;
+
 use crate::DEFAULT_BOOTSTRAP_ENV;
 
 #[derive(Debug, Clone)]
 pub struct ProcessSpec {
     pub(crate) executable: PathBuf,
     pub(crate) managed_name: Option<String>,
+    pub(crate) control_codec: PorkControlCodec,
     pub(crate) args: Vec<String>,
     pub(crate) current_dir: Option<PathBuf>,
     pub(crate) env: HashMap<String, String>,
@@ -20,6 +23,7 @@ impl ProcessSpec {
         Self {
             executable: executable.into(),
             managed_name: None,
+            control_codec: PorkControlCodec::default(),
             args: Vec::new(),
             current_dir: None,
             env: HashMap::new(),
@@ -36,6 +40,11 @@ impl ProcessSpec {
 
     pub fn without_managed_name(mut self) -> Self {
         self.managed_name = None;
+        self
+    }
+
+    pub fn control_codec(mut self, value: PorkControlCodec) -> Self {
+        self.control_codec = value;
         self
     }
 

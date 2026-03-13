@@ -15,12 +15,10 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 use ipc_channel::ipc::{IpcOneShotServer, IpcReceiver, IpcSender};
-use pork_proto::{PorkControlMessage, PorkIpcMessage};
-use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
 use crate::error::{OrchestratorError, ProcessId, Result};
 use crate::ipc::HandshakeChannels;
-use crate::spec::ProcessSpec;
+use crate::{PORK_CONTROL_CODEC_ENV, PorkControlCodec, ProcessSpec};
 
 const DEFAULT_MESSAGE_BUFFER_SIZE: usize = 1024;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -45,6 +43,8 @@ struct ProcessEntry {
     sender: IpcSender<Vec<u8>>,
     inbound_thread: Option<JoinHandle<()>>,
     managed_name: Option<String>,
+    control_codec: PorkControlCodec,
+    spec: ProcessSpec,
 }
 
 impl Default for ProcessOrchestrator {
@@ -79,23 +79,75 @@ impl ProcessOrchestrator {
     }
 
     pub fn start_process(&self, spec: ProcessSpec) -> Result<ManagedChild> {
+        self.start_process_inner(spec, true)
+    }
+
+    pub fn restart_process(&self, process_id: ProcessId) -> Result<ManagedChild> {
+        let spec = {
+            let processes = self
+                .inner
+                .processes
+                .lock()
+                .map_err(|_| OrchestratorError::LockPoisoned("processes"))?;
+            let entry = processes
+                .get(&process_id)
+                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
+            entry.spec.clone()
+        };
+
+        let _ = self.graceful_shutdown_process(process_id)?;
+        self.start_process_inner(spec, false)
+    }
+
+    pub fn restart_process_with_timeout(
+        &self,
+        process_id: ProcessId,
+        timeout: Duration,
+    ) -> Result<ManagedChild> {
+        let spec = {
+            let processes = self
+                .inner
+                .processes
+                .lock()
+                .map_err(|_| OrchestratorError::LockPoisoned("processes"))?;
+            let entry = processes
+                .get(&process_id)
+                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
+            entry.spec.clone()
+        };
+
+        let _ = self.graceful_shutdown_process_with_timeout(process_id, timeout)?;
+        self.start_process_inner(spec, false)
+    }
+
+    pub fn restart_process_by_name(&self, name: &str) -> Result<ManagedChild> {
+        let process_id = self
+            .process_id_by_name(name)?
+            .ok_or_else(|| OrchestratorError::ProcessNameNotFound(name.to_owned()))?;
+        self.restart_process(process_id)
+    }
+
+    fn start_process_inner(&self, spec: ProcessSpec, reserve_name: bool) -> Result<ManagedChild> {
         let managed_name = spec.managed_name.clone();
+        let control_codec = spec.control_codec;
         let process_id = self.inner.next_process_id.fetch_add(1, Ordering::Relaxed);
 
-        if let Some(process_name) = &managed_name {
-            let mut process_names = self
-                .inner
-                .process_names
-                .lock()
-                .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
+        if reserve_name {
+            if let Some(process_name) = &managed_name {
+                let mut process_names = self
+                    .inner
+                    .process_names
+                    .lock()
+                    .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
 
-            if process_names.contains_key(process_name) {
-                return Err(OrchestratorError::DuplicateProcessName(
-                    process_name.clone(),
-                ));
+                if process_names.contains_key(process_name) {
+                    return Err(OrchestratorError::DuplicateProcessName(
+                        process_name.clone(),
+                    ));
+                }
+
+                process_names.insert(process_name.clone(), process_id);
             }
-
-            process_names.insert(process_name.clone(), process_id);
         }
 
         let start_result = (|| -> Result<ManagedChild> {
@@ -113,6 +165,7 @@ impl ProcessOrchestrator {
             }
 
             command.env(&spec.bootstrap_env, bootstrap_name);
+            command.env(PORK_CONTROL_CODEC_ENV, control_codec.as_env_value());
 
             if spec.capture_stdout {
                 command.stdout(Stdio::piped());
@@ -128,14 +181,15 @@ impl ProcessOrchestrator {
             let sender = handshake.to_child;
             let receiver = handshake.from_child;
 
-            let (message_tx, message_rx) = mpsc::channel(self.inner.message_buffer_size);
+            let (message_tx, message_rx) =
+                tokio::sync::mpsc::channel(self.inner.message_buffer_size);
             let inbound_thread = spawn_forwarder_thread(receiver, message_tx);
 
             let managed_child = ManagedChild::new(
                 process_id,
                 managed_name.clone(),
                 sender.clone(),
-                Arc::new(AsyncMutex::new(message_rx)),
+                Arc::new(tokio::sync::Mutex::new(message_rx)),
                 self.clone(),
             );
 
@@ -144,6 +198,8 @@ impl ProcessOrchestrator {
                 sender,
                 inbound_thread: Some(inbound_thread),
                 managed_name: managed_name.clone(),
+                control_codec,
+                spec,
             };
 
             let mut processes = self
@@ -153,10 +209,19 @@ impl ProcessOrchestrator {
                 .map_err(|_| OrchestratorError::LockPoisoned("processes"))?;
             processes.insert(process_id, entry);
 
+            if let Some(process_name) = &managed_name {
+                let mut process_names = self
+                    .inner
+                    .process_names
+                    .lock()
+                    .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
+                process_names.insert(process_name.clone(), process_id);
+            }
+
             Ok(managed_child)
         })();
 
-        if start_result.is_err() {
+        if start_result.is_err() && reserve_name {
             if let Some(process_name) = &managed_name {
                 if let Ok(mut process_names) = self.inner.process_names.lock() {
                     process_names.remove(process_name);
@@ -217,11 +282,23 @@ impl ProcessOrchestrator {
     }
 
     fn request_ipc_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
-        let control_message =
-            PorkIpcMessage::<Vec<u8>>::Control(PorkControlMessage::GracefulShutdown);
-        let payload = serde_json::to_vec(&control_message)
+        let (sender, codec) = {
+            let processes = self
+                .inner
+                .processes
+                .lock()
+                .map_err(|_| OrchestratorError::LockPoisoned("processes"))?;
+            let entry = processes
+                .get(&process_id)
+                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
+            (entry.sender.clone(), entry.control_codec)
+        };
+
+        let payload = codec
+            .encode_graceful_shutdown()
             .map_err(|error| OrchestratorError::Io(std::io::Error::other(error)))?;
-        self.send(process_id, payload)
+        sender.send(payload)?;
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -402,7 +479,7 @@ impl ProcessOrchestratorBuilder {
 
 fn spawn_forwarder_thread(
     receiver: IpcReceiver<Vec<u8>>,
-    outbound: mpsc::Sender<Vec<u8>>,
+    outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         while let Ok(message) = receiver.recv() {

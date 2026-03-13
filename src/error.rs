@@ -10,8 +10,11 @@ pub enum OrchestratorError {
     Io(std::io::Error),
     Ipc(IpcError),
     ProcessNotFound(ProcessId),
+    ProcessNameNotFound(String),
     DuplicateProcessName(String),
     MissingBootstrapValue,
+    MissingControlCodec,
+    UnsupportedControlCodec(String),
     LockPoisoned(&'static str),
 }
 
@@ -21,10 +24,17 @@ impl fmt::Display for OrchestratorError {
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Ipc(error) => write!(f, "ipc error: {error}"),
             Self::ProcessNotFound(process_id) => write!(f, "process not found: {process_id}"),
+            Self::ProcessNameNotFound(name) => {
+                write!(f, "managed process with name '{name}' was not found")
+            }
             Self::DuplicateProcessName(name) => {
                 write!(f, "managed process with name '{name}' already exists")
             }
             Self::MissingBootstrapValue => write!(f, "missing bootstrap environment value"),
+            Self::MissingControlCodec => write!(f, "missing control codec environment value"),
+            Self::UnsupportedControlCodec(codec) => {
+                write!(f, "unsupported control codec '{codec}'")
+            }
             Self::LockPoisoned(name) => write!(f, "lock poisoned: {name}"),
         }
     }
