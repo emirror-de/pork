@@ -25,7 +25,7 @@ This keeps the workspace root focused on coordination while each crate owns its 
 
 ## Workspace crates
 
-- `pork` — high-level orchestration API for starting, tracking, messaging, restarting, and stopping managed child processes through explicit modules such as `orchestrator`, `spec`, `child`, `error`, and `proto`.
+- `pork` — high-level orchestration API for starting, tracking, messaging, restarting, and stopping managed child processes through explicit modules such as `orchestrator`, `spec`, `child`, and `error`.
 - `pork-proto` — shared protocol definitions in `protocol` plus feature-gated codec implementations in `codecs`.
 
 ## Quick mental model
@@ -34,8 +34,12 @@ A typical setup has two sides:
 
 1. A **host** process creates a `pork::orchestrator::ProcessOrchestrator` and starts a child from a `pork::spec::ProcessSpec`.
 2. A **child** process reads bootstrap information from the environment and connects back to the host with `pork::child::bootstrap`.
-3. Both sides exchange raw `Vec<u8>` payloads.
-4. Shared control messages and codec selection live under `pork::proto::protocol` or directly in `pork_proto::protocol`.
+3. Both sides exchange raw `Vec<u8>` payloads through `pork`.
+4. Shared control messages, typed IPC envelopes, and codec selection live in `pork_proto::protocol`.
+
+If you only need process orchestration and raw byte transport, depend on `pork`.
+
+If you want typed IPC payloads and the shared codec helpers, depend on both `pork` and `pork-proto`.
 
 ## Where to look next
 
@@ -45,10 +49,8 @@ For the actual API, examples, and behavior details, use the crate documentation:
   - `pork::orchestrator` for host-side process management
   - `pork::spec` for child process configuration
   - `pork::child::bootstrap` for child-side bootstrap helpers
-  - `pork::proto::protocol` for shared protocol items
-  - `pork::proto::codecs` for codec marker types
 - `pork-proto` crate docs: see `pork-proto/src/lib.rs`
-  - `pork_proto::protocol` for protocol models and helpers
+  - `pork_proto::protocol` for protocol models, shared control messages, and typed IPC envelopes
   - `pork_proto::codecs` for `JsonCodec` and `PostcardCodec`
 
 If you are browsing locally, the crate-level docs are the best starting point because they include the intended usage flow and focused examples for the namespaced API.
@@ -65,4 +67,4 @@ If you use Nix for local development, enter the shell first with `nix develop` a
 
 ## Status
 
-This workspace is intentionally small and focused: the main orchestration API lives in the `pork` crate, while shared protocol details live in `pork-proto`, with both crates exposing explicit, domain-specific modules instead of a flat crate-root API.
+This workspace is intentionally small and focused: the main orchestration API lives in the `pork` crate, while shared protocol details live in `pork-proto`. Users who want the full typed host/child workflow should add both crates as dependencies, keeping orchestration and protocol concerns explicit instead of relying on cross-crate re-exports.
