@@ -3,6 +3,12 @@ name = "pork-proto"
 version = "0.1.0"
 edition = "2024"
 authors = ["Lewin Probst <info@emirror.de>"]
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/emirror-de/pork"
+
+[lints]
+workspace = true
 
 [features]
 default = []
@@ -10,6 +16,6 @@ codec-json = ["dep:serde_json"]
 codec-postcard = ["dep:postcard"]
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", optional = true }
-postcard = { version = "1.1", features = ["alloc"], optional = true }
+postcard = { version = "1.1.3", optional = true }
+serde.workspace = true
+serde_json = { version = "1.0.149", optional = true }

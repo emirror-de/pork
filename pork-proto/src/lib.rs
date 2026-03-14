@@ -9,13 +9,13 @@
 //! - `PorkControlMessage` for framework-level coordination
 //! - `PorkIpcMessage<T>` for wrapping your own protocol payloads
 //! - `PorkControlCodec` for choosing how control messages are encoded
-//! - feature-gated `json` and `postcard` helpers for custom payloads
+//! - feature-gated codec implementations in [`codecs`] for custom payloads
 //! - environment helpers so parent and child agree on the selected codec
 //!
 //! # Feature flags
 //!
-//! - `codec-json` enables the JSON codec helpers
-//! - `codec-postcard` enables the Postcard codec helpers
+//! - `codec-json` enables the JSON codec implementation
+//! - `codec-postcard` enables the Postcard codec implementation
 //!
 //! You can enable one or both features depending on the transport format you
 //! want to expose to consumers.
@@ -44,11 +44,11 @@
 //! # Example: encode and decode control messages
 //!
 //! ```rust
-//! use pork_proto::{decode_control_message, encode_control_message, PorkControlCodec, PorkControlMessage};
+//! use pork_proto::{PorkControlCodec, PorkControlMessage};
 //!
 //! let codec = PorkControlCodec::Json;
-//! let bytes = encode_control_message(PorkControlMessage::GracefulShutdown, codec)?;
-//! let message = decode_control_message(&bytes, codec)?;
+//! let bytes = codec.encode_control_message(PorkControlMessage::GracefulShutdown)?;
+//! let message = codec.decode_control_message(&bytes)?;
 //!
 //! assert_eq!(message, PorkControlMessage::GracefulShutdown);
 //! # Ok::<(), pork_proto::PorkProtoCodecError>(())
@@ -58,8 +58,8 @@
 //!
 //! ```rust
 //! # #[cfg(feature = "codec-json")]
-//! # {
-//! use pork_proto::{json, PorkIpcMessage};
+//! # fn main() -> Result<(), pork_proto::PorkProtoCodecError> {
+//! use pork_proto::{JsonCodec, PorkCodec, PorkIpcMessage};
 //! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,11 +71,11 @@
 //!     command: "reload".to_owned(),
 //! });
 //!
-//! let bytes = json::encode(&original)?;
-//! let decoded: PorkIpcMessage<AppMessage> = json::decode(&bytes)?;
+//! let bytes = JsonCodec::encode(&original)?;
+//! let decoded: PorkIpcMessage<AppMessage> = JsonCodec::decode(&bytes)?;
 //!
 //! assert_eq!(decoded, original);
-//! # Ok::<(), pork_proto::PorkProtoCodecError>(())
+//! # Ok(())
 //! # }
 //! ```
 //!
@@ -114,10 +114,14 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+/// Feature-gated codec implementations for encoding and decoding [`PorkIpcMessage`]
+/// payloads through concrete [`PorkCodec`] implementations such as [`JsonCodec`]
+/// and [`PostcardCodec`].
+pub mod codecs;
 
-/// Compatibility module for protocol helpers shared with client-side consumers.
-pub mod client;
+pub use crate::codecs::{json::JsonCodec, postcard::PostcardCodec};
+
+use serde::{Deserialize, Serialize};
 
 /// Environment variable used by parent and child processes to agree on the
 /// control-message codec.
@@ -219,7 +223,7 @@ impl PorkControlCodec {
             Self::Json => {
                 #[cfg(feature = "codec-json")]
                 {
-                    json::encode(&message)
+                    JsonCodec::encode(&message)
                 }
                 #[cfg(not(feature = "codec-json"))]
                 {
@@ -230,7 +234,7 @@ impl PorkControlCodec {
             Self::Postcard => {
                 #[cfg(feature = "codec-postcard")]
                 {
-                    postcard::encode(&message)
+                    PostcardCodec::encode(&message)
                 }
                 #[cfg(not(feature = "codec-postcard"))]
                 {
@@ -250,7 +254,7 @@ impl PorkControlCodec {
             Self::Json => {
                 #[cfg(feature = "codec-json")]
                 {
-                    json::decode(bytes)?
+                    JsonCodec::decode(bytes)?
                 }
                 #[cfg(not(feature = "codec-json"))]
                 {
@@ -261,7 +265,7 @@ impl PorkControlCodec {
             Self::Postcard => {
                 #[cfg(feature = "codec-postcard")]
                 {
-                    postcard::decode(bytes)?
+                    PostcardCodec::decode(bytes)?
                 }
                 #[cfg(not(feature = "codec-postcard"))]
                 {
@@ -342,49 +346,15 @@ pub fn control_codec_from_env() -> Result<PorkControlCodec, ParsePorkControlCode
     }
 }
 
-/// Returns `true` when the given bytes decode to a graceful-shutdown control message
-/// with the provided codec.
-pub fn is_graceful_shutdown_message(message: &[u8], codec: PorkControlCodec) -> bool {
-    codec.is_graceful_shutdown_message(message)
-}
-
-/// Builds a serialized graceful-shutdown control message for the provided codec.
-pub fn graceful_shutdown_message(codec: PorkControlCodec) -> Vec<u8> {
-    codec
-        .encode_graceful_shutdown()
-        .expect("serializing graceful shutdown control message should never fail")
-}
-
-/// Serializes a control message with the provided codec.
-pub fn encode_control_message(
-    message: PorkControlMessage,
-    codec: PorkControlCodec,
-) -> Result<Vec<u8>, PorkProtoCodecError> {
-    codec.encode_control_message(message)
-}
-
-/// Deserializes a control message with the provided codec.
-pub fn decode_control_message(
-    bytes: &[u8],
-    codec: PorkControlCodec,
-) -> Result<PorkControlMessage, PorkProtoCodecError> {
-    codec.decode_control_message(bytes)
-}
-
 /// Reads a child bootstrap value from the given environment variable name.
 pub fn child_bootstrap_env_value(env_name: &str) -> Result<String, std::env::VarError> {
     std::env::var(env_name)
 }
 
-/// Resolves the child control codec from the process environment.
-pub fn child_control_codec_from_env() -> Result<PorkControlCodec, ParsePorkControlCodecError> {
-    control_codec_from_env()
-}
-
 /// Shared codec trait for feature-gated built-in encoders.
 ///
 /// Implementations are provided by the built-in codec marker types in the
-/// `json` and `postcard` modules when the respective feature is enabled.
+/// [`codecs`] module when the respective feature is enabled.
 pub trait PorkCodec {
     /// Serializes a wrapped IPC message into the codec's wire format.
     fn encode<T>(message: &PorkIpcMessage<T>) -> Result<Vec<u8>, PorkProtoCodecError>
@@ -395,90 +365,4 @@ pub trait PorkCodec {
     fn decode<T>(bytes: &[u8]) -> Result<PorkIpcMessage<T>, PorkProtoCodecError>
     where
         T: for<'de> Deserialize<'de>;
-}
-
-/// JSON codec helpers for [`PorkIpcMessage`] payloads.
-#[cfg(feature = "codec-json")]
-pub mod json {
-    use super::{PorkCodec, PorkIpcMessage, PorkProtoCodecError};
-    use serde::{Deserialize, Serialize};
-
-    /// Marker type implementing [`PorkCodec`] with `serde_json`.
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct JsonCodec;
-
-    impl PorkCodec for JsonCodec {
-        fn encode<T>(message: &PorkIpcMessage<T>) -> Result<Vec<u8>, PorkProtoCodecError>
-        where
-            T: Serialize,
-        {
-            serde_json::to_vec(message).map_err(Into::into)
-        }
-
-        fn decode<T>(bytes: &[u8]) -> Result<PorkIpcMessage<T>, PorkProtoCodecError>
-        where
-            T: for<'de> Deserialize<'de>,
-        {
-            serde_json::from_slice(bytes).map_err(Into::into)
-        }
-    }
-
-    /// Serializes a wrapped IPC message as JSON.
-    pub fn encode<T>(message: &PorkIpcMessage<T>) -> Result<Vec<u8>, PorkProtoCodecError>
-    where
-        T: Serialize,
-    {
-        JsonCodec::encode(message)
-    }
-
-    /// Deserializes a wrapped IPC message from JSON.
-    pub fn decode<T>(bytes: &[u8]) -> Result<PorkIpcMessage<T>, PorkProtoCodecError>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        JsonCodec::decode(bytes)
-    }
-}
-
-/// Postcard codec helpers for [`PorkIpcMessage`] payloads.
-#[cfg(feature = "codec-postcard")]
-pub mod postcard {
-    use super::{PorkCodec, PorkIpcMessage, PorkProtoCodecError};
-    use serde::{Deserialize, Serialize};
-
-    /// Marker type implementing [`PorkCodec`] with `postcard`.
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct PostcardCodec;
-
-    impl PorkCodec for PostcardCodec {
-        fn encode<T>(message: &PorkIpcMessage<T>) -> Result<Vec<u8>, PorkProtoCodecError>
-        where
-            T: Serialize,
-        {
-            postcard::to_stdvec(message).map_err(PorkProtoCodecError::from_postcard_error)
-        }
-
-        fn decode<T>(bytes: &[u8]) -> Result<PorkIpcMessage<T>, PorkProtoCodecError>
-        where
-            T: for<'de> Deserialize<'de>,
-        {
-            postcard::from_bytes(bytes).map_err(PorkProtoCodecError::from_postcard_error)
-        }
-    }
-
-    /// Serializes a wrapped IPC message as Postcard.
-    pub fn encode<T>(message: &PorkIpcMessage<T>) -> Result<Vec<u8>, PorkProtoCodecError>
-    where
-        T: Serialize,
-    {
-        PostcardCodec::encode(message)
-    }
-
-    /// Deserializes a wrapped IPC message from Postcard.
-    pub fn decode<T>(bytes: &[u8]) -> Result<PorkIpcMessage<T>, PorkProtoCodecError>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        PostcardCodec::decode(bytes)
-    }
 }

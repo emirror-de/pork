@@ -13,6 +13,16 @@ Use `pork` when you want to:
 - send application-defined payloads between host and child,
 - and keep framework-level shutdown behavior consistent.
 
+## Workspace layout
+
+This repository uses a workspace-first layout:
+
+- repository root — virtual workspace and shared workspace files
+- `pork/` — main `pork` library crate
+- `pork-proto/` — shared protocol crate
+
+This keeps the workspace root focused on coordination while each crate owns its own manifest, source tree, and tests.
+
 ## Workspace crates
 
 - `pork` — high-level orchestration API for starting, tracking, messaging, restarting, and stopping managed child processes.
@@ -32,10 +42,20 @@ A typical setup has two sides:
 For the actual API, examples, and behavior details, use the crate documentation:
 
 - `pork` crate docs: see `pork/src/lib.rs`
-- `pork-proto` crate docs: see `pork/pork-proto/src/lib.rs`
+- `pork-proto` crate docs: see `pork-proto/src/lib.rs`
 
 If you are browsing locally, the crate-level docs are the best starting point because they include the intended usage flow and focused examples.
 
+## Validate locally
+
+From the repository root, run:
+
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace --all-targets`
+
+If you use Nix for local development, enter the shell first with `nix develop` and then run the same commands.
+
 ## Status
 
-This workspace is intentionally small and focused: top-level orchestration in `pork`, shared protocol details in `pork-proto`.
+This workspace is intentionally small and focused: the main orchestration API lives in the `pork` crate, while shared protocol details live in `pork-proto`.

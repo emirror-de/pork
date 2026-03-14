@@ -1,0 +1,18 @@
+[package]
+name = "pork"
+version = "0.1.0"
+edition = "2024"
+authors = ["Lewin Probst <info@emirror.de>"]
+rust-version = "1.85"
+
+[dependencies]
+interprocess.workspace = true
+ipc-channel.workspace = true
+nix.workspace = true
+pork-proto = { path = "../pork-proto", features = ["codec-json", "codec-postcard"] }
+serde.workspace = true
+tokio.workspace = true
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

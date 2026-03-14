@@ -64,26 +64,6 @@ impl ProcessOrchestrator {
         Self::builder().build()
     }
 
-    /// Creates an orchestrator with a custom inbound message buffer size.
-    ///
-    /// This controls the size of the Tokio channel used to forward child-to-host
-    /// messages from the IPC receiver thread into async code.
-    pub fn with_message_buffer_size(message_buffer_size: usize) -> Self {
-        Self::builder()
-            .message_buffer_size(message_buffer_size)
-            .build()
-    }
-
-    /// Creates an orchestrator with a custom graceful-shutdown timeout.
-    ///
-    /// The timeout is used by [`Self::graceful_shutdown_process`] and the
-    /// corresponding convenience methods on [`ManagedChild`].
-    pub fn with_graceful_shutdown_timeout(graceful_shutdown_timeout: Duration) -> Self {
-        Self::builder()
-            .graceful_shutdown_timeout(graceful_shutdown_timeout)
-            .build()
-    }
-
     /// Returns a builder for configuring a [`ProcessOrchestrator`].
     pub fn builder() -> ProcessOrchestratorBuilder {
         ProcessOrchestratorBuilder::default()
@@ -148,35 +128,25 @@ impl ProcessOrchestrator {
         self.start_process_inner(spec, false)
     }
 
-    /// Restarts an existing managed process by its managed name.
-    pub fn restart_process_by_name(&self, name: &str) -> Result<ManagedChild> {
-        let process_id = self
-            .process_id_by_name(name)?
-            .ok_or_else(|| OrchestratorError::ProcessNameNotFound(name.to_owned()))?;
-        self.restart_process(process_id)
-    }
-
     fn start_process_inner(&self, spec: ProcessSpec, reserve_name: bool) -> Result<ManagedChild> {
         let managed_name = spec.managed_name.clone();
         let control_codec = spec.control_codec;
         let process_id = self.inner.next_process_id.fetch_add(1, Ordering::Relaxed);
 
-        if reserve_name {
-            if let Some(process_name) = &managed_name {
-                let mut process_names = self
-                    .inner
-                    .process_names
-                    .lock()
-                    .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
+        if reserve_name && let Some(process_name) = &managed_name {
+            let mut process_names = self
+                .inner
+                .process_names
+                .lock()
+                .map_err(|_| OrchestratorError::LockPoisoned("process_names"))?;
 
-                if process_names.contains_key(process_name) {
-                    return Err(OrchestratorError::DuplicateProcessName(
-                        process_name.clone(),
-                    ));
-                }
-
-                process_names.insert(process_name.clone(), process_id);
+            if process_names.contains_key(process_name) {
+                return Err(OrchestratorError::DuplicateProcessName(
+                    process_name.clone(),
+                ));
             }
+
+            process_names.insert(process_name.clone(), process_id);
         }
 
         let start_result = (|| -> Result<ManagedChild> {
@@ -219,7 +189,6 @@ impl ProcessOrchestrator {
                 managed_name.clone(),
                 sender.clone(),
                 Arc::new(tokio::sync::Mutex::new(message_rx)),
-                self.clone(),
             );
 
             let entry = ProcessEntry {
@@ -250,12 +219,12 @@ impl ProcessOrchestrator {
             Ok(managed_child)
         })();
 
-        if start_result.is_err() && reserve_name {
-            if let Some(process_name) = &managed_name {
-                if let Ok(mut process_names) = self.inner.process_names.lock() {
-                    process_names.remove(process_name);
-                }
-            }
+        if start_result.is_err()
+            && reserve_name
+            && let Some(process_name) = &managed_name
+            && let Ok(mut process_names) = self.inner.process_names.lock()
+        {
+            process_names.remove(process_name);
         }
 
         start_result

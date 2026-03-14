@@ -1,11 +1,8 @@
-use std::process::ExitStatus;
 use std::sync::Arc;
-use std::time::Duration;
 
 use ipc_channel::ipc::IpcSender;
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
-use super::ProcessOrchestrator;
 use crate::error::{ProcessId, Result};
 
 /// Handle for interacting with a managed child process.
@@ -19,7 +16,6 @@ pub struct ManagedChild {
     name: Option<String>,
     sender: IpcSender<Vec<u8>>,
     receiver: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
-    orchestrator: ProcessOrchestrator,
 }
 
 impl ManagedChild {
@@ -28,14 +24,12 @@ impl ManagedChild {
         name: Option<String>,
         sender: IpcSender<Vec<u8>>,
         receiver: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
-        orchestrator: ProcessOrchestrator,
     ) -> Self {
         Self {
             process_id,
             name,
             sender,
             receiver,
-            orchestrator,
         }
     }
 
@@ -65,43 +59,5 @@ impl ManagedChild {
     pub async fn recv(&self) -> Option<Vec<u8>> {
         let mut receiver = self.receiver.lock().await;
         receiver.recv().await
-    }
-
-    /// Requests a graceful shutdown and waits using the orchestrator's default timeout.
-    pub fn shutdown(&self) -> Result<ExitStatus> {
-        self.orchestrator.graceful_shutdown_process(self.process_id)
-    }
-
-    /// Requests a graceful shutdown and waits up to the provided timeout.
-    ///
-    /// If the child does not exit in time, the orchestrator falls back to a
-    /// forceful stop.
-    pub fn shutdown_with_timeout(&self, timeout: Duration) -> Result<ExitStatus> {
-        self.orchestrator
-            .graceful_shutdown_process_with_timeout(self.process_id, timeout)
-    }
-
-    /// Restarts the child process using the original [`crate::ProcessSpec`].
-    pub fn restart(&self) -> Result<Self> {
-        self.orchestrator.restart_process(self.process_id)
-    }
-
-    /// Gracefully shuts down the child with a custom timeout and then restarts it
-    /// using the original [`crate::ProcessSpec`].
-    pub fn restart_with_timeout(&self, timeout: Duration) -> Result<Self> {
-        self.orchestrator
-            .restart_process_with_timeout(self.process_id, timeout)
-    }
-
-    /// Stops the child process immediately and waits for it to exit.
-    pub fn stop(&self) -> Result<ExitStatus> {
-        self.orchestrator.stop_process(self.process_id)
-    }
-
-    /// Checks whether the child process has already exited without blocking.
-    ///
-    /// Returns `Ok(None)` if the process is still running.
-    pub fn try_wait(&self) -> Result<Option<ExitStatus>> {
-        self.orchestrator.try_wait(self.process_id)
     }
 }

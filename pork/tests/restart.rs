@@ -4,7 +4,6 @@ use std::time::Duration;
 use pork::{
     DEFAULT_BOOTSTRAP_ENV, ManagedChild, OrchestratorError, PorkControlCodec, ProcessOrchestrator,
     ProcessSpec, child_connect_from_env, child_control_codec_from_env,
-    is_graceful_shutdown_message,
 };
 
 fn current_exe_spec() -> ProcessSpec {
@@ -27,8 +26,10 @@ fn recv_utf8(child: &ManagedChild) -> String {
 }
 
 #[test]
-fn orchestrator_restart_process_replaces_child_and_preserves_managed_name() {
-    let orchestrator = ProcessOrchestrator::with_graceful_shutdown_timeout(Duration::from_secs(2));
+fn orchestrator_restart_process_replaces_child_and_preserves_managed_name_via_process_id() {
+    let orchestrator = ProcessOrchestrator::builder()
+        .graceful_shutdown_timeout(Duration::from_secs(2))
+        .build();
 
     let child = orchestrator
         .start_process(current_exe_spec())
@@ -44,7 +45,9 @@ fn orchestrator_restart_process_replaces_child_and_preserves_managed_name() {
         .expect("managed process should exist");
     assert_eq!(named_id_before, first_id);
 
-    let restarted = child.restart().expect("restart should succeed");
+    let restarted = orchestrator
+        .restart_process(child.id())
+        .expect("restart should succeed");
     let second_announcement = recv_utf8(&restarted);
     assert!(second_announcement.starts_with("started:"));
 
@@ -62,7 +65,9 @@ fn orchestrator_restart_process_replaces_child_and_preserves_managed_name() {
         .expect("process listing should succeed");
     assert_eq!(active_process_ids, vec![second_id]);
 
-    let shutdown_status = restarted.shutdown().expect("shutdown should succeed");
+    let shutdown_status = orchestrator
+        .graceful_shutdown_process(restarted.id())
+        .expect("shutdown should succeed");
     assert!(
         shutdown_status.success() || shutdown_status.code().is_none(),
         "shutdown should either exit cleanly or terminate by signal: {shutdown_status:?}"
@@ -83,8 +88,10 @@ fn orchestrator_restart_process_replaces_child_and_preserves_managed_name() {
 }
 
 #[test]
-fn orchestrator_restart_process_by_name_restarts_named_child() {
-    let orchestrator = ProcessOrchestrator::with_graceful_shutdown_timeout(Duration::from_secs(2));
+fn orchestrator_restart_process_after_name_lookup_restarts_named_child() {
+    let orchestrator = ProcessOrchestrator::builder()
+        .graceful_shutdown_timeout(Duration::from_secs(2))
+        .build();
 
     let child = orchestrator
         .start_process(current_exe_spec())
@@ -93,9 +100,13 @@ fn orchestrator_restart_process_by_name_restarts_named_child() {
     let _ = recv_utf8(&child);
 
     let original_id = child.id();
+    let process_id = orchestrator
+        .process_id_by_name("restart-test-child")
+        .expect("lookup should succeed")
+        .expect("managed process should exist");
     let restarted = orchestrator
-        .restart_process_by_name("restart-test-child")
-        .expect("named restart should succeed");
+        .restart_process(process_id)
+        .expect("restart should succeed");
 
     let restarted_id = restarted.id();
     assert_ne!(restarted_id, original_id);
@@ -104,7 +115,9 @@ fn orchestrator_restart_process_by_name_restarts_named_child() {
     let restart_message = recv_utf8(&restarted);
     assert!(restart_message.starts_with("started:"));
 
-    let shutdown_status = restarted.shutdown().expect("shutdown should succeed");
+    let shutdown_status = orchestrator
+        .graceful_shutdown_process(restarted.id())
+        .expect("shutdown should succeed");
     assert!(
         shutdown_status.success() || shutdown_status.code().is_none(),
         "shutdown should either exit cleanly or terminate by signal: {shutdown_status:?}"
@@ -125,11 +138,13 @@ fn orchestrator_restart_process_by_name_restarts_named_child() {
 }
 
 #[test]
-fn orchestrator_restart_process_by_name_returns_not_found_for_unknown_name() {
+fn process_id_by_name_returns_not_found_shape_for_unknown_name() {
     let orchestrator = ProcessOrchestrator::new();
 
     let error = orchestrator
-        .restart_process_by_name("missing-process")
+        .process_id_by_name("missing-process")
+        .expect("lookup should succeed")
+        .ok_or_else(|| OrchestratorError::ProcessNameNotFound("missing-process".to_owned()))
         .expect_err("restart should fail for an unknown managed name");
 
     match error {
@@ -157,7 +172,7 @@ fn restart_test_child_entrypoint() {
 
     loop {
         let message = receiver.recv().expect("child should receive IPC messages");
-        if is_graceful_shutdown_message(&message, codec) {
+        if codec.is_graceful_shutdown_message(&message) {
             break;
         }
     }

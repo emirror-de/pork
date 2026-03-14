@@ -7,7 +7,7 @@
 //! - exchange raw IPC payloads,
 //! - and gracefully shut children down with a shared control protocol.
 //!
-//! The crate re-exports the control-plane types from `pork-proto`, so most applications
+//! The crate re-exports the core control-plane types from `pork-proto`, so most applications
 //! can depend on `pork` alone when building a supervisor and a managed child binary.
 //!
 //! # What the crate-level attributes mean
@@ -66,7 +66,7 @@
 //! )?;
 //!
 //! child.send(b"ping".to_vec())?;
-//! let _exit_status = child.shutdown()?;
+//! let _exit_status = orchestrator.graceful_shutdown_process(child.id())?;
 //! # Ok::<(), pork::OrchestratorError>(())
 //! ```
 //!
@@ -119,6 +119,7 @@
 //!             let _ = message;
 //!         }
 //!
+//!         let _exit_status = orchestrator.graceful_shutdown_process(child.id())?;
 //!         Ok(())
 //!     })
 //! }
@@ -128,10 +129,12 @@
 //!
 //! - [`ProcessOrchestrator`] manages child lifecycle and process lookup.
 //! - [`ProcessSpec`] configures how a child process is started.
-//! - [`ManagedChild`] provides a handle for messaging and lifecycle operations.
+//! - [`ManagedChild`] provides a handle for messaging and child identity.
 //! - [`child_connect_from_env`] and [`child_connect`] are the child-side bootstrap helpers.
 //! - Re-exported protocol items such as [`PorkControlCodec`] and [`PorkIpcMessage`] let you
 //!   share the same control-plane contract across host and child binaries.
+//! - Lower-level protocol helper functions and codec modules remain available from `pork-proto`
+//!   when you want a narrower dependency on just the shared protocol layer.
 #![deny(missing_docs)]
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
@@ -149,10 +152,8 @@ pub use child::bootstrap::{
 pub use error::{OrchestratorError, ProcessId, Result};
 pub use orchestrator::{ManagedChild, ProcessOrchestrator, ProcessOrchestratorBuilder};
 pub use pork_proto::{
-    PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkCodec, PorkControlCodec,
-    PorkControlMessage, PorkIpcMessage, PorkProtoCodecError, control_codec_from_env,
-    decode_control_message, encode_control_message, graceful_shutdown_message,
-    is_graceful_shutdown_message, json as proto_json, postcard as proto_postcard,
+    PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec, PorkControlMessage,
+    PorkIpcMessage,
 };
 pub use spec::ProcessSpec;
 

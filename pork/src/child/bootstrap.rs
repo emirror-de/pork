@@ -4,6 +4,10 @@ use crate::error::{OrchestratorError, Result};
 use crate::ipc::HandshakeChannels;
 use crate::{PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec};
 
+type ChildInboundReceiver = IpcReceiver<Vec<u8>>;
+type ChildOutboundSender = IpcSender<Vec<u8>>;
+type ChildBootstrapChannels = (ChildInboundReceiver, ChildOutboundSender);
+
 /// Reads the child bootstrap value from the given environment variable.
 ///
 /// This is typically used inside a managed child process to retrieve the
@@ -30,9 +34,7 @@ pub fn child_control_codec_from_env() -> Result<PorkControlCodec> {
 /// On success, returns `(from_host, to_host)` where:
 /// - `from_host` receives raw messages sent by the parent
 /// - `to_host` sends raw messages back to the parent
-pub fn child_connect_from_env(
-    env_name: &str,
-) -> Result<(IpcReceiver<Vec<u8>>, IpcSender<Vec<u8>>)> {
+pub fn child_connect_from_env(env_name: &str) -> Result<ChildBootstrapChannels> {
     let bootstrap_value = child_bootstrap_env_value(env_name)?;
     child_connect(&bootstrap_value)
 }
@@ -46,7 +48,7 @@ pub fn child_connect_from_env(
 /// On success, returns `(from_host, to_host)` where:
 /// - `from_host` receives raw messages sent by the parent
 /// - `to_host` sends raw messages back to the parent
-pub fn child_connect(bootstrap_value: &str) -> Result<(IpcReceiver<Vec<u8>>, IpcSender<Vec<u8>>)> {
+pub fn child_connect(bootstrap_value: &str) -> Result<ChildBootstrapChannels> {
     let bootstrap_sender: IpcSender<HandshakeChannels> =
         IpcSender::connect(bootstrap_value.to_owned())?;
 
