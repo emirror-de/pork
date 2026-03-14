@@ -16,12 +16,14 @@ async fn main() -> Result<()> {
     println!("host: starting child at {}", child_binary.display());
 
     let control_codec = PorkControlCodec::Json;
-    let child = orchestrator.start_process(
-        ProcessSpec::new(child_binary)
-            .managed_name(CHILD_MANAGED_NAME)
-            .capture_output()
-            .control_codec(control_codec),
-    )?;
+    let child = orchestrator
+        .start_process(
+            ProcessSpec::new(child_binary)
+                .managed_name(CHILD_MANAGED_NAME)
+                .capture_output()
+                .control_codec(control_codec),
+        )
+        .await?;
 
     let (process_id, managed_name) = child.identity();
     println!(
@@ -31,11 +33,12 @@ async fn main() -> Result<()> {
     );
 
     let lookup_id = orchestrator
-        .process_id_by_name(CHILD_MANAGED_NAME)?
+        .process_id_by_name(CHILD_MANAGED_NAME)
+        .await?
         .ok_or_else(|| OrchestratorError::ProcessNameNotFound(CHILD_MANAGED_NAME.to_owned()))?;
     println!("host: lookup by name resolved to process id={lookup_id}");
 
-    let registered_names = orchestrator.process_names()?;
+    let registered_names = orchestrator.process_names().await?;
     println!("host: registered managed names: {registered_names:?}");
 
     let ready = recv_child_message(&child, control_codec).await?;
@@ -59,7 +62,7 @@ async fn main() -> Result<()> {
     }
 
     println!("host: requesting graceful shutdown");
-    let exit_status = orchestrator.graceful_shutdown_process(child.id())?;
+    let exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
     println!("host: child exited with status {exit_status}");
 
     Ok(())

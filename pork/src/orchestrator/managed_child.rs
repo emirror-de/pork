@@ -1,7 +1,10 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_util::StreamExt;
+use ipc_channel::asynch::IpcStream;
 use ipc_channel::ipc::IpcSender;
-use tokio::sync::{Mutex as AsyncMutex, mpsc};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{ProcessId, Result};
 
@@ -10,12 +13,12 @@ use crate::error::{ProcessId, Result};
 /// A `ManagedChild` lets you send raw IPC messages, receive responses, and
 /// inspect the child identity after it has been started by a
 /// [`ProcessOrchestrator`](super::ProcessOrchestrator).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ManagedChild {
     process_id: ProcessId,
     name: Option<String>,
     sender: IpcSender<Vec<u8>>,
-    receiver: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
+    receiver: Arc<AsyncMutex<Pin<Box<IpcStream<Vec<u8>>>>>>,
 }
 
 impl ManagedChild {
@@ -23,7 +26,7 @@ impl ManagedChild {
         process_id: ProcessId,
         name: Option<String>,
         sender: IpcSender<Vec<u8>>,
-        receiver: Arc<AsyncMutex<mpsc::Receiver<Vec<u8>>>>,
+        receiver: Arc<AsyncMutex<Pin<Box<IpcStream<Vec<u8>>>>>>,
     ) -> Self {
         Self {
             process_id,
@@ -78,6 +81,6 @@ impl ManagedChild {
     /// Returns `None` when the inbound channel has been closed.
     pub async fn recv(&self) -> Option<Vec<u8>> {
         let mut receiver = self.receiver.lock().await;
-        receiver.recv().await
+        receiver.next().await.and_then(|message| message.ok())
     }
 }

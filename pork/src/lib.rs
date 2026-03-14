@@ -40,9 +40,12 @@
 //!     .managed_name("worker")
 //!     .arg("--serve");
 //!
-//! let child = orchestrator.start_process(spec)?;
-//! # let _ = child;
-//! # Ok::<(), pork::error::OrchestratorError>(())
+//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//! runtime.block_on(async {
+//!     let child = orchestrator.start_process(spec).await?;
+//!     let _ = child;
+//!     Ok::<(), pork::error::OrchestratorError>(())
+//! })?;
 //! ```
 //!
 //! # Host example
@@ -55,16 +58,21 @@
 //!
 //! let orchestrator = ProcessOrchestrator::new();
 //!
-//! let child = orchestrator.start_process(
-//!     ProcessSpec::new("./child-binary")
-//!         .managed_name("example-child")
-//!         .capture_stdout(true)
-//!         .capture_stderr(true),
-//! )?;
+//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//! runtime.block_on(async {
+//!     let child = orchestrator
+//!         .start_process(
+//!             ProcessSpec::new("./child-binary")
+//!                 .managed_name("example-child")
+//!                 .capture_stdout(true)
+//!                 .capture_stderr(true),
+//!         )
+//!         .await?;
 //!
-//! child.send(b"ping".to_vec())?;
-//! let _exit_status = orchestrator.graceful_shutdown_process(child.id())?;
-//! # Ok::<(), pork::error::OrchestratorError>(())
+//!     child.send(b"ping".to_vec())?;
+//!     let _exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
+//!     Ok::<(), pork::error::OrchestratorError>(())
+//! })?;
 //! ```
 //!
 //! # Child example
@@ -76,9 +84,12 @@
 //! use pork::child::bootstrap::child_connect_from_env;
 //! use pork::DEFAULT_BOOTSTRAP_ENV;
 //!
-//! let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV)?;
-//! # let _ = (from_host, to_host);
-//! # Ok::<(), pork::error::OrchestratorError>(())
+//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//! runtime.block_on(async {
+//!     let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
+//!     let _ = (from_host, to_host);
+//!     Ok::<(), pork::error::OrchestratorError>(())
+//! })?;
 //! ```
 //!
 //! # Using a specific control codec
@@ -98,8 +109,11 @@
 //!     .managed_name("postcard-child")
 //!     .control_codec(PorkControlCodec::Postcard);
 //!
-//! let _child = orchestrator.start_process(spec)?;
-//! # Ok::<(), pork::error::OrchestratorError>(())
+//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//! runtime.block_on(async {
+//!     let _child = orchestrator.start_process(spec).await?;
+//!     Ok::<(), pork::error::OrchestratorError>(())
+//! })?;
 //! ```
 //!
 //! # Receiving messages asynchronously
@@ -114,13 +128,15 @@
 //!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
 //!     runtime.block_on(async {
 //!         let orchestrator = ProcessOrchestrator::new();
-//!         let child = orchestrator.start_process(ProcessSpec::new("./child-binary"))?;
+//!         let child = orchestrator
+//!             .start_process(ProcessSpec::new("./child-binary"))
+//!             .await?;
 //!
 //!         if let Some(message) = child.recv().await {
 //!             let _ = message;
 //!         }
 //!
-//!         let _exit_status = orchestrator.graceful_shutdown_process(child.id())?;
+//!         let _exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
 //!         Ok(())
 //!     })
 //! }
@@ -131,7 +147,7 @@
 //! - [`orchestrator::ProcessOrchestrator`] manages child lifecycle and process lookup.
 //! - [`spec::ProcessSpec`] configures how a child process is started.
 //! - [`orchestrator::ManagedChild`] provides a handle for messaging and child identity.
-//! - [`child::bootstrap::child_connect_from_env`] and [`child::bootstrap::child_connect`] are the child-side bootstrap helpers.
+//! - [`child::bootstrap::child_connect_from_env`] and [`child::bootstrap::child_connect`] are the async child-side bootstrap helpers.
 //! - The companion `pork-proto` crate contains the shared control-plane contract and
 //!   codec marker types.
 #![deny(missing_docs)]

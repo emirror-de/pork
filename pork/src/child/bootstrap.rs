@@ -1,11 +1,14 @@
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{OrchestratorError, Result};
 use crate::ipc::HandshakeChannels;
 use pork_proto::protocol::{PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec};
 
-type ChildInboundReceiver = IpcReceiver<Vec<u8>>;
-type ChildOutboundSender = IpcSender<Vec<u8>>;
+/// Async child-side receiver for raw host messages.
+pub type ChildInboundReceiver = AsyncMutex<IpcReceiver<Vec<u8>>>;
+/// Child-side sender for raw messages back to the host.
+pub type ChildOutboundSender = IpcSender<Vec<u8>>;
 type ChildBootstrapChannels = (ChildInboundReceiver, ChildOutboundSender);
 
 /// Reads the child bootstrap value from the given environment variable.
@@ -34,9 +37,9 @@ pub fn child_control_codec_from_env() -> Result<PorkControlCodec> {
 /// On success, returns `(from_host, to_host)` where:
 /// - `from_host` receives raw messages sent by the parent
 /// - `to_host` sends raw messages back to the parent
-pub fn child_connect_from_env(env_name: &str) -> Result<ChildBootstrapChannels> {
+pub async fn child_connect_from_env(env_name: &str) -> Result<ChildBootstrapChannels> {
     let bootstrap_value = child_bootstrap_env_value(env_name)?;
-    child_connect(&bootstrap_value)
+    child_connect(&bootstrap_value).await
 }
 
 /// Connects a child process back to the parent using an explicit bootstrap value.
@@ -48,7 +51,7 @@ pub fn child_connect_from_env(env_name: &str) -> Result<ChildBootstrapChannels> 
 /// On success, returns `(from_host, to_host)` where:
 /// - `from_host` receives raw messages sent by the parent
 /// - `to_host` sends raw messages back to the parent
-pub fn child_connect(bootstrap_value: &str) -> Result<ChildBootstrapChannels> {
+pub async fn child_connect(bootstrap_value: &str) -> Result<ChildBootstrapChannels> {
     let bootstrap_sender: IpcSender<HandshakeChannels> =
         IpcSender::connect(bootstrap_value.to_owned())?;
 
@@ -60,6 +63,9 @@ pub fn child_connect(bootstrap_value: &str) -> Result<ChildBootstrapChannels> {
         from_child: from_child_receiver,
     };
 
-    bootstrap_sender.send(handshake)?;
-    Ok((to_child_receiver, from_child_sender))
+    tokio::task::spawn_blocking(move || bootstrap_sender.send(handshake))
+        .await
+        .map_err(|error| OrchestratorError::Io(std::io::Error::other(error)))??;
+
+    Ok((AsyncMutex::new(to_child_receiver), from_child_sender))
 }

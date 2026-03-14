@@ -1,11 +1,12 @@
 use pork::DEFAULT_BOOTSTRAP_ENV;
-use pork::child::{child_connect_from_env, child_control_codec_from_env};
+use pork::child::bootstrap::{child_connect_from_env, child_control_codec_from_env};
 use pork_comms::{ChildMessage, HostMessage, decode_message, encode_message};
 use pork_proto::protocol::PorkControlCodec;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let control_codec = child_control_codec_from_env()?;
-    let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV)?;
+    let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
     let mut handled_messages = 0_usize;
 
     println!(
@@ -21,7 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?)?;
 
     loop {
-        let payload = from_host.recv()?;
+        let payload = {
+            let from_host = from_host.lock().await;
+            from_host.recv()?
+        };
 
         if control_codec.is_graceful_shutdown_message(&payload) {
             println!("child: received graceful shutdown request");
