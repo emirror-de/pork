@@ -5,6 +5,11 @@ edition = "2024"
 authors = ["Lewin Probst <info@emirror.de>"]
 rust-version = "1.85"
 
+[features]
+default = []
+codec-json = []
+codec-postcard = []
+
 [dependencies]
 interprocess.workspace = true
 ipc-channel.workspace = true

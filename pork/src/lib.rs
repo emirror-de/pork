@@ -7,36 +7,30 @@
 //! - exchange raw IPC payloads,
 //! - and gracefully shut children down with a shared control protocol.
 //!
-//! The crate re-exports the core control-plane types from `pork-proto`, so most applications
-//! can depend on `pork` alone when building a supervisor and a managed child binary.
+//! The crate exposes explicit domain modules so the public API stays navigable:
 //!
-//! # What the crate-level attributes mean
-//!
-//! This crate opts into strict documentation and linting at the crate level:
-//!
-//! - `#![deny(missing_docs)]` requires public API documentation.
-//! - `#![deny(clippy::unwrap_used)]` rejects `unwrap()` in linted code paths.
-//! - `#![deny(clippy::expect_used)]` rejects `expect()` in linted code paths.
-//!
-//! For you as a user, that means the public API is intended to stay discoverable and the
-//! examples favor explicit error handling over shortcuts.
+//! - [`orchestrator`] for process lifecycle management,
+//! - [`spec`] for child process configuration,
+//! - [`child`] for child-side bootstrap helpers,
+//! - [`error`] for orchestration error types,
+//! - [`proto`] for the shared protocol definitions from `pork-proto`.
 //!
 //! # Typical architecture
 //!
 //! A Pork-based setup usually has two sides:
 //!
-//! 1. A **host** process that creates a [`ProcessOrchestrator`] and starts one or more children.
+//! 1. A **host** process that creates an [`orchestrator::ProcessOrchestrator`] and starts one or more children.
 //! 2. A **child** process that reads bootstrap configuration from the environment and connects
-//!    back to the host with [`child_connect_from_env`].
+//!    back to the host with [`child::bootstrap::child_connect_from_env`].
 //!
 //! The host sends and receives raw `Vec<u8>` payloads. If you want a shared envelope for custom
-//! messages plus framework control messages, use [`PorkIpcMessage`] from the re-exported
-//! protocol module.
+//! messages plus framework control messages, use [`proto::protocol::PorkIpcMessage`].
 //!
 //! # Quick start
 //!
 //! ```no_run
-//! use pork::{ProcessOrchestrator, ProcessSpec};
+//! use pork::orchestrator::ProcessOrchestrator;
+//! use pork::spec::ProcessSpec;
 //!
 //! let orchestrator = ProcessOrchestrator::new();
 //!
@@ -46,7 +40,7 @@
 //!
 //! let child = orchestrator.start_process(spec)?;
 //! # let _ = child;
-//! # Ok::<(), pork::OrchestratorError>(())
+//! # Ok::<(), pork::error::OrchestratorError>(())
 //! ```
 //!
 //! # Host example
@@ -54,7 +48,8 @@
 //! This example starts a child, sends one raw message, and then requests a graceful shutdown.
 //!
 //! ```no_run
-//! use pork::{ProcessOrchestrator, ProcessSpec};
+//! use pork::orchestrator::ProcessOrchestrator;
+//! use pork::spec::ProcessSpec;
 //!
 //! let orchestrator = ProcessOrchestrator::new();
 //!
@@ -67,7 +62,7 @@
 //!
 //! child.send(b"ping".to_vec())?;
 //! let _exit_status = orchestrator.graceful_shutdown_process(child.id())?;
-//! # Ok::<(), pork::OrchestratorError>(())
+//! # Ok::<(), pork::error::OrchestratorError>(())
 //! ```
 //!
 //! # Child example
@@ -76,21 +71,24 @@
 //! the configured environment variable.
 //!
 //! ```no_run
-//! use pork::{DEFAULT_BOOTSTRAP_ENV, child_connect_from_env};
+//! use pork::child::bootstrap::child_connect_from_env;
+//! use pork::DEFAULT_BOOTSTRAP_ENV;
 //!
 //! let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV)?;
 //! # let _ = (from_host, to_host);
-//! # Ok::<(), pork::OrchestratorError>(())
+//! # Ok::<(), pork::error::OrchestratorError>(())
 //! ```
 //!
 //! # Using a specific control codec
 //!
 //! The orchestrator automatically exports the selected control codec to the child process via
-//! [`PORK_CONTROL_CODEC_ENV`]. If you want to force a specific codec for control messages, set
-//! it on the [`ProcessSpec`] before starting the process.
+//! [`proto::protocol::PORK_CONTROL_CODEC_ENV`]. If you want to force a specific codec for control
+//! messages, set it on the [`spec::ProcessSpec`] before starting the process.
 //!
 //! ```no_run
-//! use pork::{PorkControlCodec, ProcessOrchestrator, ProcessSpec};
+//! use pork::orchestrator::ProcessOrchestrator;
+//! use pork::proto::protocol::PorkControlCodec;
+//! use pork::spec::ProcessSpec;
 //!
 //! let orchestrator = ProcessOrchestrator::new();
 //!
@@ -99,17 +97,18 @@
 //!     .control_codec(PorkControlCodec::Postcard);
 //!
 //! let _child = orchestrator.start_process(spec)?;
-//! # Ok::<(), pork::OrchestratorError>(())
+//! # Ok::<(), pork::error::OrchestratorError>(())
 //! ```
 //!
 //! # Receiving messages asynchronously
 //!
-//! [`ManagedChild::recv`] is async and integrates naturally into a Tokio application.
+//! [`orchestrator::ManagedChild::recv`] is async and integrates naturally into a Tokio application.
 //!
 //! ```no_run
-//! use pork::{ProcessOrchestrator, ProcessSpec};
+//! use pork::orchestrator::ProcessOrchestrator;
+//! use pork::spec::ProcessSpec;
 //!
-//! fn main() -> Result<(), pork::OrchestratorError> {
+//! fn main() -> Result<(), pork::error::OrchestratorError> {
 //!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
 //!     runtime.block_on(async {
 //!         let orchestrator = ProcessOrchestrator::new();
@@ -127,35 +126,52 @@
 //!
 //! # API guide
 //!
-//! - [`ProcessOrchestrator`] manages child lifecycle and process lookup.
-//! - [`ProcessSpec`] configures how a child process is started.
-//! - [`ManagedChild`] provides a handle for messaging and child identity.
-//! - [`child_connect_from_env`] and [`child_connect`] are the child-side bootstrap helpers.
-//! - Re-exported protocol items such as [`PorkControlCodec`] and [`PorkIpcMessage`] let you
-//!   share the same control-plane contract across host and child binaries.
-//! - Lower-level protocol helper functions and codec modules remain available from `pork-proto`
-//!   when you want a narrower dependency on just the shared protocol layer.
+//! - [`orchestrator::ProcessOrchestrator`] manages child lifecycle and process lookup.
+//! - [`spec::ProcessSpec`] configures how a child process is started.
+//! - [`orchestrator::ManagedChild`] provides a handle for messaging and child identity.
+//! - [`child::bootstrap::child_connect_from_env`] and [`child::bootstrap::child_connect`] are the child-side bootstrap helpers.
+//! - [`proto::protocol`] contains the shared control-plane contract.
+//! - [`proto::codecs`] contains the feature-gated codec marker types such as
+//!   [`proto::codecs::JsonCodec`] and [`proto::codecs::PostcardCodec`].
 #![deny(missing_docs)]
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(unsafe_code)]
 
-mod child;
-mod error;
+/// Child-side bootstrap helpers and shared child process constants.
+pub mod child;
+/// Error types and convenience aliases used by the orchestration API.
+pub mod error;
 mod ipc;
-mod orchestrator;
-mod spec;
+/// Host-side process lifecycle management types.
+pub mod orchestrator;
+pub mod proto {
+    //! Shared control-plane types and codecs provided by the companion `pork-proto` crate.
 
-pub use child::bootstrap::{
-    child_bootstrap_env_value, child_connect, child_connect_from_env, child_control_codec_from_env,
-};
-pub use error::{OrchestratorError, ProcessId, Result};
-pub use orchestrator::{ManagedChild, ProcessOrchestrator, ProcessOrchestratorBuilder};
-pub use pork_proto::{
-    PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec, PorkControlMessage,
-    PorkIpcMessage,
-};
-pub use spec::ProcessSpec;
+    pub mod codecs {
+        //! Feature-gated codec marker types re-exposed from `pork-proto`.
+        //!
+        //! Use [`JsonCodec`] or [`PostcardCodec`] directly from this module when
+        //! you want the `pork` crate to remain your single dependency for the
+        //! shared protocol surface.
+
+        #[cfg(feature = "codec-json")]
+        pub use pork_proto::codecs::JsonCodec;
+        #[cfg(feature = "codec-postcard")]
+        pub use pork_proto::codecs::PostcardCodec;
+    }
+
+    pub mod protocol {
+        //! Shared protocol definitions re-exposed from `pork-proto`.
+
+        pub use pork_proto::protocol::{
+            PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec,
+            PorkControlMessage, PorkIpcMessage,
+        };
+    }
+}
+/// Child process configuration types and builders.
+pub mod spec;
 
 /// Default environment variable name used to pass the bootstrap handshake value
 /// from the host process to a managed child.

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use pork_proto::PorkControlCodec;
+use pork_proto::protocol::PorkControlCodec;
 
 use crate::DEFAULT_BOOTSTRAP_ENV;
 
@@ -41,6 +41,51 @@ impl ProcessSpec {
             capture_stdout: false,
             capture_stderr: false,
         }
+    }
+
+    /// Returns the executable path used to spawn the child process.
+    pub fn executable(&self) -> &PathBuf {
+        &self.executable
+    }
+
+    /// Returns the configured managed name, if one was assigned.
+    pub fn managed_name_ref(&self) -> Option<&str> {
+        self.managed_name.as_deref()
+    }
+
+    /// Returns the configured control-message codec.
+    pub fn control_codec_ref(&self) -> PorkControlCodec {
+        self.control_codec
+    }
+
+    /// Returns the configured command-line arguments.
+    pub fn args_ref(&self) -> &[String] {
+        &self.args
+    }
+
+    /// Returns the configured working directory, if one was assigned.
+    pub fn current_dir_ref(&self) -> Option<&PathBuf> {
+        self.current_dir.as_ref()
+    }
+
+    /// Returns the configured child environment overrides.
+    pub fn env_ref(&self) -> &HashMap<String, String> {
+        &self.env
+    }
+
+    /// Returns the environment variable name used for the bootstrap handshake.
+    pub fn bootstrap_env_ref(&self) -> &str {
+        &self.bootstrap_env
+    }
+
+    /// Returns whether stdout capture is enabled.
+    pub fn captures_stdout(&self) -> bool {
+        self.capture_stdout
+    }
+
+    /// Returns whether stderr capture is enabled.
+    pub fn captures_stderr(&self) -> bool {
+        self.capture_stderr
     }
 
     /// Assigns a stable managed name to the child process.
@@ -92,6 +137,21 @@ impl ProcessSpec {
         self
     }
 
+    /// Extends the child environment with multiple key-value pairs.
+    pub fn envs<I, K, V>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.env.extend(
+            values
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into())),
+        );
+        self
+    }
+
     /// Overrides the environment variable name used for bootstrap handshake data.
     ///
     /// The default value is [`DEFAULT_BOOTSTRAP_ENV`].
@@ -109,6 +169,20 @@ impl ProcessSpec {
     /// Enables or disables stderr capture for the child process.
     pub fn capture_stderr(mut self, value: bool) -> Self {
         self.capture_stderr = value;
+        self
+    }
+
+    /// Enables both stdout and stderr capture.
+    pub fn capture_output(mut self) -> Self {
+        self.capture_stdout = true;
+        self.capture_stderr = true;
+        self
+    }
+
+    /// Disables both stdout and stderr capture.
+    pub fn without_output_capture(mut self) -> Self {
+        self.capture_stdout = false;
+        self.capture_stderr = false;
         self
     }
 }

@@ -8,7 +8,7 @@ use crate::error::{ProcessId, Result};
 /// Handle for interacting with a managed child process.
 ///
 /// A `ManagedChild` lets you send raw IPC messages, receive responses, and
-/// control the child lifecycle after it has been started by a
+/// inspect the child identity after it has been started by a
 /// [`ProcessOrchestrator`](super::ProcessOrchestrator).
 #[derive(Debug, Clone)]
 pub struct ManagedChild {
@@ -41,6 +41,26 @@ impl ManagedChild {
     /// Returns the configured managed name, if one was assigned.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// Returns `true` when this child has a managed name.
+    pub fn has_name(&self) -> bool {
+        self.name.is_some()
+    }
+
+    /// Returns the child identity as `(process_id, managed_name)`.
+    pub fn identity(&self) -> (ProcessId, Option<&str>) {
+        (self.process_id, self.name())
+    }
+
+    /// Returns the stable process identifier assigned by the orchestrator.
+    pub fn process_id(&self) -> ProcessId {
+        self.id()
+    }
+
+    /// Returns the configured managed name, if one was assigned.
+    pub fn managed_name(&self) -> Option<&str> {
+        self.name()
     }
 
     /// Sends a raw message payload to the child process.

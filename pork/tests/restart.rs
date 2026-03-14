@@ -1,10 +1,12 @@
 use std::env;
 use std::time::Duration;
 
-use pork::{
-    DEFAULT_BOOTSTRAP_ENV, ManagedChild, OrchestratorError, PorkControlCodec, ProcessOrchestrator,
-    ProcessSpec, child_connect_from_env, child_control_codec_from_env,
-};
+use pork::DEFAULT_BOOTSTRAP_ENV;
+use pork::child::bootstrap::{child_connect_from_env, child_control_codec_from_env};
+use pork::error::OrchestratorError;
+use pork::orchestrator::{ManagedChild, ProcessOrchestrator};
+use pork::proto::protocol::PorkControlCodec;
+use pork::spec::ProcessSpec;
 
 fn current_exe_spec() -> ProcessSpec {
     let executable = env::current_exe().expect("current test executable path should be available");

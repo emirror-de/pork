@@ -1,6 +1,5 @@
-mod managed_child;
-
-pub use managed_child::ManagedChild;
+/// Managed child process handles and child-facing interaction types.
+pub mod managed_child;
 
 use std::collections::HashMap;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -18,7 +17,10 @@ use ipc_channel::ipc::{IpcOneShotServer, IpcReceiver, IpcSender};
 
 use crate::error::{OrchestratorError, ProcessId, Result};
 use crate::ipc::HandshakeChannels;
-use crate::{PORK_CONTROL_CODEC_ENV, PorkControlCodec, ProcessSpec};
+use crate::spec::ProcessSpec;
+use pork_proto::protocol::{PORK_CONTROL_CODEC_ENV, PorkControlCodec};
+
+pub use managed_child::ManagedChild;
 
 const DEFAULT_MESSAGE_BUFFER_SIZE: usize = 1024;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
