@@ -392,6 +392,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pork-comms"
+version = "0.1.0"
+dependencies = [
+ "pork",
+ "tokio",
+]
+
+[[package]]
 name = "pork-proto"
 version = "0.1.0"
 dependencies = [

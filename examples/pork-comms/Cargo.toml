@@ -1,0 +1,13 @@
+[package]
+name = "pork-comms"
+version = "0.1.0"
+edition = "2024"
+authors = ["Lewin Probst <info@emirror.de>"]
+rust-version = "1.85"
+
+[dependencies]
+pork = { path = "../../pork", features = ["codec-json", "codec-postcard"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

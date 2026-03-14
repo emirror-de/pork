@@ -1,7 +1,8 @@
 [workspace]
-members = [
+members = ["examples/pork-comms",
     "pork",
-    "pork-proto"
+    "pork-proto",
+    "examples/pork-comms"
 ]
 resolver = "3"
 
