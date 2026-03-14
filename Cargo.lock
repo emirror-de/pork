@@ -396,6 +396,8 @@ name = "pork-comms"
 version = "0.1.0"
 dependencies = [
  "pork",
+ "pork-proto",
+ "serde",
  "tokio",
 ]
 

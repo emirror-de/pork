@@ -7,6 +7,8 @@ rust-version = "1.85"
 
 [dependencies]
 pork = { path = "../../pork", features = ["codec-json", "codec-postcard"] }
+pork-proto = { path = "../../pork-proto", features = ["codec-json", "codec-postcard"] }
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]

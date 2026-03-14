@@ -2,9 +2,7 @@ use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 
 use crate::error::{OrchestratorError, Result};
 use crate::ipc::HandshakeChannels;
-use crate::proto::protocol::{
-    PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec,
-};
+use pork_proto::protocol::{PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec};
 
 type ChildInboundReceiver = IpcReceiver<Vec<u8>>;
 type ChildOutboundSender = IpcSender<Vec<u8>>;

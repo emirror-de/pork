@@ -5,8 +5,8 @@ use pork::DEFAULT_BOOTSTRAP_ENV;
 use pork::child::bootstrap::{child_connect_from_env, child_control_codec_from_env};
 use pork::error::OrchestratorError;
 use pork::orchestrator::{ManagedChild, ProcessOrchestrator};
-use pork::proto::protocol::PorkControlCodec;
 use pork::spec::ProcessSpec;
+use pork_proto::protocol::PorkControlCodec;
 
 fn current_exe_spec() -> ProcessSpec {
     let executable = env::current_exe().expect("current test executable path should be available");

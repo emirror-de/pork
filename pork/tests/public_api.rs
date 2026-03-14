@@ -1,6 +1,6 @@
 use pork::DEFAULT_BOOTSTRAP_ENV;
-use pork::proto::protocol::PorkControlCodec;
 use pork::spec::ProcessSpec;
+use pork_proto::protocol::PorkControlCodec;
 
 #[test]
 fn process_spec_exposes_configured_fields_through_accessors() {

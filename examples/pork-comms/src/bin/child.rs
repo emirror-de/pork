@@ -1,6 +1,7 @@
 use pork::DEFAULT_BOOTSTRAP_ENV;
 use pork::child::{child_connect_from_env, child_control_codec_from_env};
-use pork_comms::{ChildMessage, HostMessage};
+use pork_comms::{ChildMessage, HostMessage, decode_message, encode_message};
+use pork_proto::protocol::PorkControlCodec;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let control_codec = child_control_codec_from_env()?;
@@ -12,12 +13,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         control_codec.as_env_value()
     );
 
-    to_host.send(
+    to_host.send(encode_message(
+        control_codec,
         ChildMessage::Ready {
-            codec: control_codec.as_env_value().to_owned(),
-        }
-        .encode(),
-    )?;
+            codec: control_codec_name(control_codec).to_owned(),
+        },
+    )?)?;
 
     loop {
         let payload = from_host.recv()?;
@@ -27,28 +28,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
-        let message = HostMessage::decode(&payload)?;
+        let Some(message) = decode_message::<HostMessage>(control_codec, &payload)? else {
+            continue;
+        };
+
         handled_messages += 1;
 
         match message {
             HostMessage::Echo(text) => {
                 println!("child: received echo request '{text}'");
-                to_host.send(ChildMessage::Echoed(text).encode())?;
+                to_host.send(encode_message(control_codec, ChildMessage::Echoed(text))?)?;
             }
             HostMessage::Status => {
                 println!("child: received status request");
-                to_host.send(
+                to_host.send(encode_message(
+                    control_codec,
                     ChildMessage::Status {
                         pid: std::process::id(),
                         handled_messages,
-                        codec: control_codec.as_env_value().to_owned(),
-                    }
-                    .encode(),
-                )?;
+                        codec: control_codec_name(control_codec).to_owned(),
+                    },
+                )?)?;
             }
         }
     }
 
     println!("child: exiting cleanly");
     Ok(())
+}
+
+fn control_codec_name(codec: PorkControlCodec) -> &'static str {
+    match codec {
+        PorkControlCodec::Json => "json",
+        PorkControlCodec::Postcard => "postcard",
+    }
 }

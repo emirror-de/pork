@@ -12,8 +12,10 @@
 //! - [`orchestrator`] for process lifecycle management,
 //! - [`spec`] for child process configuration,
 //! - [`child`] for child-side bootstrap helpers,
-//! - [`error`] for orchestration error types,
-//! - [`proto`] for the shared protocol definitions from `pork-proto`.
+//! - [`error`] for orchestration error types.
+//!
+//! Pair this crate with the companion `pork-proto` crate when you want the
+//! shared control-plane types and codec implementations.
 //!
 //! # Typical architecture
 //!
@@ -24,7 +26,7 @@
 //!    back to the host with [`child::bootstrap::child_connect_from_env`].
 //!
 //! The host sends and receives raw `Vec<u8>` payloads. If you want a shared envelope for custom
-//! messages plus framework control messages, use [`proto::protocol::PorkIpcMessage`].
+//! messages plus framework control messages, use `pork_proto::protocol::PorkIpcMessage`.
 //!
 //! # Quick start
 //!
@@ -82,13 +84,13 @@
 //! # Using a specific control codec
 //!
 //! The orchestrator automatically exports the selected control codec to the child process via
-//! [`proto::protocol::PORK_CONTROL_CODEC_ENV`]. If you want to force a specific codec for control
-//! messages, set it on the [`spec::ProcessSpec`] before starting the process.
+//! `pork_proto::protocol::PORK_CONTROL_CODEC_ENV`. If you want to force a specific codec for
+//! control messages, set it on the [`spec::ProcessSpec`] before starting the process.
 //!
 //! ```no_run
 //! use pork::orchestrator::ProcessOrchestrator;
-//! use pork::proto::protocol::PorkControlCodec;
 //! use pork::spec::ProcessSpec;
+//! use pork_proto::protocol::PorkControlCodec;
 //!
 //! let orchestrator = ProcessOrchestrator::new();
 //!
@@ -130,9 +132,8 @@
 //! - [`spec::ProcessSpec`] configures how a child process is started.
 //! - [`orchestrator::ManagedChild`] provides a handle for messaging and child identity.
 //! - [`child::bootstrap::child_connect_from_env`] and [`child::bootstrap::child_connect`] are the child-side bootstrap helpers.
-//! - [`proto::protocol`] contains the shared control-plane contract.
-//! - [`proto::codecs`] contains the feature-gated codec marker types such as
-//!   [`proto::codecs::JsonCodec`] and [`proto::codecs::PostcardCodec`].
+//! - The companion `pork-proto` crate contains the shared control-plane contract and
+//!   codec marker types.
 #![deny(missing_docs)]
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
@@ -145,31 +146,6 @@ pub mod error;
 mod ipc;
 /// Host-side process lifecycle management types.
 pub mod orchestrator;
-pub mod proto {
-    //! Shared control-plane types and codecs provided by the companion `pork-proto` crate.
-
-    pub mod codecs {
-        //! Feature-gated codec marker types re-exposed from `pork-proto`.
-        //!
-        //! Use [`JsonCodec`] or [`PostcardCodec`] directly from this module when
-        //! you want the `pork` crate to remain your single dependency for the
-        //! shared protocol surface.
-
-        #[cfg(feature = "codec-json")]
-        pub use pork_proto::codecs::JsonCodec;
-        #[cfg(feature = "codec-postcard")]
-        pub use pork_proto::codecs::PostcardCodec;
-    }
-
-    pub mod protocol {
-        //! Shared protocol definitions re-exposed from `pork-proto`.
-
-        pub use pork_proto::protocol::{
-            PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec,
-            PorkControlMessage, PorkIpcMessage,
-        };
-    }
-}
 /// Child process configuration types and builders.
 pub mod spec;
 
