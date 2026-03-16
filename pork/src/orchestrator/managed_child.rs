@@ -8,6 +8,9 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{ProcessId, Result};
 
+type ManagedChildReceiverStream = Pin<Box<IpcStream<Vec<u8>>>>;
+type SharedManagedChildReceiver = Arc<AsyncMutex<ManagedChildReceiverStream>>;
+
 /// Handle for interacting with a managed child process.
 ///
 /// A `ManagedChild` lets you send raw IPC messages, receive responses, and
@@ -18,7 +21,7 @@ pub struct ManagedChild {
     process_id: ProcessId,
     name: Option<String>,
     sender: IpcSender<Vec<u8>>,
-    receiver: Arc<AsyncMutex<Pin<Box<IpcStream<Vec<u8>>>>>>,
+    receiver: SharedManagedChildReceiver,
 }
 
 impl ManagedChild {
@@ -26,7 +29,7 @@ impl ManagedChild {
         process_id: ProcessId,
         name: Option<String>,
         sender: IpcSender<Vec<u8>>,
-        receiver: Arc<AsyncMutex<Pin<Box<IpcStream<Vec<u8>>>>>>,
+        receiver: SharedManagedChildReceiver,
     ) -> Self {
         Self {
             process_id,

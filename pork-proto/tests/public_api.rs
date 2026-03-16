@@ -42,11 +42,14 @@ fn pork_control_codec_parse_accepts_supported_values() {
 
 #[test]
 fn pork_control_codec_parse_rejects_unknown_values_with_original_input() {
-    let error = "xml"
-        .parse::<PorkControlCodec>()
-        .expect_err("unsupported codec value should fail");
+    let parsed = "xml".parse::<PorkControlCodec>();
+    assert!(parsed.is_err());
 
-    assert_eq!(error, "xml".parse::<PorkControlCodec>().unwrap_err());
+    let error = match parsed {
+        Ok(codec) => panic!("unsupported codec value should fail, got {codec:?}"),
+        Err(error) => error,
+    };
+
     assert_eq!(error.value(), "xml");
     assert_eq!(error.to_string(), "unsupported control codec 'xml'");
 }
@@ -90,20 +93,24 @@ fn available_codecs_match_feature_flags() {
 fn encode_control_message_reports_unavailable_codec_features() {
     #[cfg(not(feature = "codec-json"))]
     {
-        let error = PorkControlCodec::Json
-            .encode_control_message(PorkControlMessage::GracefulShutdown)
-            .expect_err("json codec should be unavailable without feature");
+        let result =
+            PorkControlCodec::Json.encode_control_message(PorkControlMessage::GracefulShutdown);
 
-        assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec));
+        match result {
+            Ok(_) => panic!("json codec should be unavailable without feature"),
+            Err(error) => assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec)),
+        }
     }
 
     #[cfg(not(feature = "codec-postcard"))]
     {
-        let error = PorkControlCodec::Postcard
-            .encode_control_message(PorkControlMessage::GracefulShutdown)
-            .expect_err("postcard codec should be unavailable without feature");
+        let result =
+            PorkControlCodec::Postcard.encode_control_message(PorkControlMessage::GracefulShutdown);
 
-        assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec));
+        match result {
+            Ok(_) => panic!("postcard codec should be unavailable without feature"),
+            Err(error) => assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec)),
+        }
     }
 }
 
@@ -112,22 +119,24 @@ fn decode_control_message_reports_unavailable_codec_features() {
     #[cfg(not(feature = "codec-json"))]
     {
         let bytes = b"not-a-valid-control-message";
-        let error = PorkControlCodec::Json
-            .decode_control_message(bytes)
-            .expect_err("json codec should be unavailable without feature");
+        let result = PorkControlCodec::Json.decode_control_message(bytes);
 
-        assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec));
+        match result {
+            Ok(_) => panic!("json codec should be unavailable without feature"),
+            Err(error) => assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec)),
+        }
         assert!(!PorkControlCodec::Json.is_graceful_shutdown_message(bytes));
     }
 
     #[cfg(not(feature = "codec-postcard"))]
     {
         let bytes = b"not-a-valid-control-message";
-        let error = PorkControlCodec::Postcard
-            .decode_control_message(bytes)
-            .expect_err("postcard codec should be unavailable without feature");
+        let result = PorkControlCodec::Postcard.decode_control_message(bytes);
 
-        assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec));
+        match result {
+            Ok(_) => panic!("postcard codec should be unavailable without feature"),
+            Err(error) => assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec)),
+        }
         assert!(!PorkControlCodec::Postcard.is_graceful_shutdown_message(bytes));
     }
 }
@@ -135,12 +144,21 @@ fn decode_control_message_reports_unavailable_codec_features() {
 #[cfg(feature = "codec-json")]
 #[test]
 fn json_codec_round_trips_graceful_shutdown_control_messages() {
-    let bytes = PorkControlCodec::Json
-        .encode_graceful_shutdown()
-        .expect("json graceful shutdown encoding should succeed");
-    let decoded = PorkControlCodec::Json
-        .decode_control_message(&bytes)
-        .expect("json graceful shutdown decoding should succeed");
+    let encoded = PorkControlCodec::Json.encode_graceful_shutdown();
+    assert!(encoded.is_ok());
+
+    let bytes = match encoded {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("json graceful shutdown encoding should succeed: {error}"),
+    };
+
+    let decoded_result = PorkControlCodec::Json.decode_control_message(&bytes);
+    assert!(decoded_result.is_ok());
+
+    let decoded = match decoded_result {
+        Ok(message) => message,
+        Err(error) => panic!("json graceful shutdown decoding should succeed: {error}"),
+    };
 
     assert_eq!(decoded, PorkControlMessage::GracefulShutdown);
     assert!(PorkControlCodec::Json.is_graceful_shutdown(&decoded));
@@ -150,12 +168,21 @@ fn json_codec_round_trips_graceful_shutdown_control_messages() {
 #[cfg(feature = "codec-postcard")]
 #[test]
 fn postcard_codec_round_trips_graceful_shutdown_control_messages() {
-    let bytes = PorkControlCodec::Postcard
-        .encode_graceful_shutdown()
-        .expect("postcard graceful shutdown encoding should succeed");
-    let decoded = PorkControlCodec::Postcard
-        .decode_control_message(&bytes)
-        .expect("postcard graceful shutdown decoding should succeed");
+    let encoded = PorkControlCodec::Postcard.encode_graceful_shutdown();
+    assert!(encoded.is_ok());
+
+    let bytes = match encoded {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("postcard graceful shutdown encoding should succeed: {error}"),
+    };
+
+    let decoded_result = PorkControlCodec::Postcard.decode_control_message(&bytes);
+    assert!(decoded_result.is_ok());
+
+    let decoded = match decoded_result {
+        Ok(message) => message,
+        Err(error) => panic!("postcard graceful shutdown decoding should succeed: {error}"),
+    };
 
     assert_eq!(decoded, PorkControlMessage::GracefulShutdown);
     assert!(PorkControlCodec::Postcard.is_graceful_shutdown(&decoded));
@@ -168,12 +195,21 @@ fn json_codec_rejects_custom_payloads_as_control_messages() {
     use pork_proto::codecs::JsonCodec;
     use pork_proto::protocol::PorkCodec;
 
-    let bytes = JsonCodec::encode(&PorkIpcMessage::custom(String::from("ping")))
-        .expect("json custom payload encoding should succeed");
+    let encoded = JsonCodec::encode(&PorkIpcMessage::custom(String::from("ping")));
+    assert!(encoded.is_ok());
 
-    let error = PorkControlCodec::Json
-        .decode_control_message(&bytes)
-        .expect_err("custom payload should not decode as a control message");
+    let bytes = match encoded {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("json custom payload encoding should succeed: {error}"),
+    };
+
+    let decoded = PorkControlCodec::Json.decode_control_message(&bytes);
+    assert!(decoded.is_err());
+
+    let error = match decoded {
+        Ok(message) => panic!("custom payload should not decode as a control message: {message:?}"),
+        Err(error) => error,
+    };
 
     assert!(matches!(
         error,
@@ -188,12 +224,21 @@ fn postcard_codec_rejects_custom_payloads_as_control_messages() {
     use pork_proto::codecs::PostcardCodec;
     use pork_proto::protocol::PorkCodec;
 
-    let bytes = PostcardCodec::encode(&PorkIpcMessage::custom(String::from("ping")))
-        .expect("postcard custom payload encoding should succeed");
+    let encoded = PostcardCodec::encode(&PorkIpcMessage::custom(String::from("ping")));
+    assert!(encoded.is_ok());
 
-    let error = PorkControlCodec::Postcard
-        .decode_control_message(&bytes)
-        .expect_err("custom payload should not decode as a control message");
+    let bytes = match encoded {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("postcard custom payload encoding should succeed: {error}"),
+    };
+
+    let decoded = PorkControlCodec::Postcard.decode_control_message(&bytes);
+    assert!(decoded.is_err());
+
+    let error = match decoded {
+        Ok(message) => panic!("custom payload should not decode as a control message: {message:?}"),
+        Err(error) => error,
+    };
 
     assert!(matches!(error, PorkProtoCodecError::UnsupportedCodec));
     assert!(!PorkControlCodec::Postcard.is_graceful_shutdown_message(&bytes));

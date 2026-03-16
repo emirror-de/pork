@@ -17,9 +17,10 @@ Use `pork` when you want to:
 
 This repository uses a workspace-first layout:
 
-- repository root — virtual workspace and shared workspace files
+- repository root — shared workspace files, Nix development setup, and top-level documentation
 - `pork/` — main `pork` library crate
 - `pork-proto/` — shared protocol crate
+- `examples/pork-comms/` — small host/child example showing typed message exchange
 
 This keeps the workspace root focused on coordination while each crate owns its own manifest, source tree, and tests.
 
@@ -55,6 +56,82 @@ For the actual API, examples, and behavior details, use the crate documentation:
 
 If you are browsing locally, the crate-level docs are the best starting point because they include the intended usage flow and focused examples for the namespaced API.
 
+## Installation
+
+### Prerequisites
+
+You need:
+
+- Rust `1.85` or newer
+- a working Cargo toolchain
+- Unix-like local IPC support for the current process model
+- optional: Nix with flakes enabled if you want the provided development shell
+
+### Build the workspace
+
+From the repository root, run:
+
+```/dev/null/install.sh#L1-2
+cargo build --workspace
+cargo test --workspace --all-targets
+```
+
+### Optional Nix development shell
+
+If you use Nix for local development, enter the shell first and then run the same Cargo commands:
+
+```/dev/null/install.sh#L1-2
+nix develop
+cargo test --workspace --all-targets
+```
+
+## Basic workflow
+
+A typical workflow has three parts:
+
+1. define how the child process should be started with `pork::spec::ProcessSpec`
+2. start and manage the child from `pork::orchestrator::ProcessOrchestrator`
+3. connect from the child side with `pork::child::bootstrap::child_connect_from_env`
+
+For a complete typed example, see `examples/pork-comms/`.
+
+## Quick example workflow
+
+Host side sketch:
+
+```/dev/null/host.rs#L1-16
+use pork::orchestrator::ProcessOrchestrator;
+use pork::spec::ProcessSpec;
+
+async fn run_host() -> Result<(), pork::error::OrchestratorError> {
+    let orchestrator = ProcessOrchestrator::new();
+    let child = orchestrator
+        .start_process(
+            ProcessSpec::new("./child-binary")
+                .managed_name("worker")
+                .capture_output(),
+        )
+        .await?;
+
+    child.send(b"ping".to_vec())?;
+    let _status = orchestrator.graceful_shutdown_process(child.id()).await?;
+    Ok(())
+}
+```
+
+Child side sketch:
+
+```/dev/null/child.rs#L1-11
+use pork::child::bootstrap::child_connect_from_env;
+use pork::DEFAULT_BOOTSTRAP_ENV;
+
+async fn run_child() -> Result<(), pork::error::OrchestratorError> {
+    let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
+    let _ = (from_host, to_host);
+    Ok(())
+}
+```
+
 ## Validate locally
 
 From the repository root, run:
@@ -63,7 +140,16 @@ From the repository root, run:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace --all-targets`
 
-If you use Nix for local development, enter the shell first with `nix develop` and then run the same commands.
+## Example project
+
+The `examples/pork-comms/` crate demonstrates a small end-to-end setup with:
+
+- a host binary
+- a child binary
+- typed messages encoded with `pork-proto`
+- coverage for both JSON and Postcard codec flows
+
+Use that example when you want a concrete reference before integrating `pork` into your own application.
 
 ## Status
 

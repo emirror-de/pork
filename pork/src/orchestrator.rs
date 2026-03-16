@@ -287,16 +287,12 @@ impl ProcessOrchestrator {
         let sleep = tokio::time::sleep(timeout);
         tokio::pin!(sleep);
 
-        loop {
-            tokio::select! {
-                result = self.wait_for_exit(process_id) => {
-                    let status = result?;
-                    return self.finish_process_shutdown(process_id, status).await;
-                }
-                _ = &mut sleep => {
-                    return self.stop_process(process_id).await;
-                }
+        tokio::select! {
+            result = self.wait_for_exit(process_id) => {
+                let status = result?;
+                self.finish_process_shutdown(process_id, status).await
             }
+            _ = &mut sleep => self.stop_process(process_id).await,
         }
     }
 
