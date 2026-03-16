@@ -6,7 +6,7 @@ use pork::child::bootstrap::{child_connect_from_env, child_control_codec_from_en
 use pork::error::OrchestratorError;
 use pork::orchestrator::{ManagedChild, ProcessOrchestrator};
 use pork::spec::ProcessSpec;
-use pork_proto::protocol::PorkControlCodec;
+use pork_proto::protocol::{PorkChildStatus, PorkControlCodec};
 
 fn current_exe_spec() -> ProcessSpec {
     let executable = env::current_exe().expect("current test executable path should be available");
@@ -22,6 +22,80 @@ fn current_exe_spec() -> ProcessSpec {
 async fn recv_utf8(child: &ManagedChild) -> String {
     let message = child.recv().await.expect("child should send a message");
     String::from_utf8(message).expect("child message should be valid utf-8")
+}
+
+#[tokio::test]
+async fn orchestrator_reports_running_status_for_started_child() {
+    let orchestrator = ProcessOrchestrator::builder()
+        .graceful_shutdown_timeout(Duration::from_secs(2))
+        .build();
+
+    let child = orchestrator
+        .start_process(current_exe_spec())
+        .await
+        .expect("child should start");
+
+    let _ = recv_utf8(&child).await;
+
+    let status_by_id = orchestrator
+        .process_status(child.id())
+        .await
+        .expect("status lookup by id should succeed");
+    assert_eq!(status_by_id, PorkChildStatus::Running);
+
+    let status_by_name = orchestrator
+        .process_status_by_name("restart-test-child")
+        .await
+        .expect("status lookup by name should succeed");
+    assert_eq!(status_by_name, PorkChildStatus::Running);
+
+    let shutdown_status = orchestrator
+        .graceful_shutdown_process(child.id())
+        .await
+        .expect("shutdown should succeed");
+    assert!(
+        shutdown_status.success() || shutdown_status.code().is_none(),
+        "shutdown should either exit cleanly or terminate by signal: {shutdown_status:?}"
+    );
+}
+
+#[tokio::test]
+async fn orchestrator_reports_stopping_status_after_graceful_shutdown_request() {
+    let orchestrator = ProcessOrchestrator::builder()
+        .graceful_shutdown_timeout(Duration::from_secs(2))
+        .build();
+
+    let child = orchestrator
+        .start_process(current_exe_spec())
+        .await
+        .expect("child should start");
+
+    let _ = recv_utf8(&child).await;
+
+    orchestrator
+        .request_graceful_shutdown(child.id())
+        .await
+        .expect("graceful shutdown request should succeed");
+
+    let status = orchestrator
+        .process_status(child.id())
+        .await
+        .expect("status lookup should succeed while child is still tracked");
+    assert_eq!(status, PorkChildStatus::Stopping);
+
+    let shutdown_status = orchestrator
+        .graceful_shutdown_process_with_timeout(child.id(), Duration::from_millis(10))
+        .await
+        .expect("child should exit after graceful shutdown request");
+    assert!(
+        shutdown_status.success() || shutdown_status.code().is_none(),
+        "shutdown should either exit cleanly or terminate by signal: {shutdown_status:?}"
+    );
+
+    assert!(matches!(
+        orchestrator.process_status(child.id()).await,
+        Err(OrchestratorError::ProcessNotFound(id)) if id == child.id()
+    ));
 }
 
 #[tokio::test]

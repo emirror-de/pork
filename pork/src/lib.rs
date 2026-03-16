@@ -34,18 +34,21 @@
 //! use pork::orchestrator::ProcessOrchestrator;
 //! use pork::spec::ProcessSpec;
 //!
-//! let orchestrator = ProcessOrchestrator::new();
+//! fn main() -> Result<(), pork::error::OrchestratorError> {
+//!     let orchestrator = ProcessOrchestrator::new();
 //!
-//! let spec = ProcessSpec::new("./my-child-binary")
-//!     .managed_name("worker")
-//!     .arg("--serve");
+//!     let spec = ProcessSpec::new("./my-child-binary")
+//!         .managed_name("worker")
+//!         .arg("--serve");
 //!
-//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//! runtime.block_on(async {
-//!     let child = orchestrator.start_process(spec).await?;
-//!     let _ = child;
-//!     Ok::<(), pork::error::OrchestratorError>(())
-//! })?;
+//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//!     runtime.block_on(async {
+//!         let child = orchestrator.start_process(spec).await?;
+//!         let _ = child;
+//!         Ok::<(), pork::error::OrchestratorError>(())
+//!     })?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Host example
@@ -56,23 +59,26 @@
 //! use pork::orchestrator::ProcessOrchestrator;
 //! use pork::spec::ProcessSpec;
 //!
-//! let orchestrator = ProcessOrchestrator::new();
+//! fn main() -> Result<(), pork::error::OrchestratorError> {
+//!     let orchestrator = ProcessOrchestrator::new();
 //!
-//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//! runtime.block_on(async {
-//!     let child = orchestrator
-//!         .start_process(
-//!             ProcessSpec::new("./child-binary")
-//!                 .managed_name("example-child")
-//!                 .capture_stdout(true)
-//!                 .capture_stderr(true),
-//!         )
-//!         .await?;
+//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//!     runtime.block_on(async {
+//!         let child = orchestrator
+//!             .start_process(
+//!                 ProcessSpec::new("./child-binary")
+//!                     .managed_name("example-child")
+//!                     .capture_stdout(true)
+//!                     .capture_stderr(true),
+//!             )
+//!             .await?;
 //!
-//!     child.send(b"ping".to_vec())?;
-//!     let _exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
-//!     Ok::<(), pork::error::OrchestratorError>(())
-//! })?;
+//!         child.send(b"ping".to_vec())?;
+//!         let _exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
+//!         Ok::<(), pork::error::OrchestratorError>(())
+//!     })?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Child example
@@ -84,12 +90,15 @@
 //! use pork::child::bootstrap::child_connect_from_env;
 //! use pork::DEFAULT_BOOTSTRAP_ENV;
 //!
-//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//! runtime.block_on(async {
-//!     let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
-//!     let _ = (from_host, to_host);
-//!     Ok::<(), pork::error::OrchestratorError>(())
-//! })?;
+//! fn main() -> Result<(), pork::error::OrchestratorError> {
+//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//!     runtime.block_on(async {
+//!         let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
+//!         let _ = (from_host, to_host);
+//!         Ok::<(), pork::error::OrchestratorError>(())
+//!     })?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Using a specific control codec
@@ -103,17 +112,20 @@
 //! use pork::spec::ProcessSpec;
 //! use pork_proto::protocol::PorkControlCodec;
 //!
-//! let orchestrator = ProcessOrchestrator::new();
+//! fn main() -> Result<(), pork::error::OrchestratorError> {
+//!     let orchestrator = ProcessOrchestrator::new();
 //!
-//! let spec = ProcessSpec::new("./child-binary")
-//!     .managed_name("postcard-child")
-//!     .control_codec(PorkControlCodec::Postcard);
+//!     let spec = ProcessSpec::new("./child-binary")
+//!         .managed_name("postcard-child")
+//!         .control_codec(PorkControlCodec::Postcard);
 //!
-//! let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//! runtime.block_on(async {
-//!     let _child = orchestrator.start_process(spec).await?;
-//!     Ok::<(), pork::error::OrchestratorError>(())
-//! })?;
+//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//!     runtime.block_on(async {
+//!         let _child = orchestrator.start_process(spec).await?;
+//!         Ok::<(), pork::error::OrchestratorError>(())
+//!     })?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Receiving messages asynchronously

@@ -127,6 +127,21 @@ pub mod protocol {
     /// control-message codec.
     pub const PORK_CONTROL_CODEC_ENV: &str = "PORK_CONTROL_CODEC";
 
+    /// Lifecycle state of a managed child process.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum PorkChildStatus {
+        /// The managed child is fully running and available.
+        Running,
+        /// The managed child is in the process of starting.
+        Starting,
+        /// The managed child is in the process of stopping.
+        Stopping,
+        /// The managed child is fully stopped.
+        Stopped,
+        /// The managed child is in the process of restarting.
+        Restarting,
+    }
+
     /// Host-to-child and child-to-host control-plane messages shared by all
     /// Pork-based IPC protocols.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

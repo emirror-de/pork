@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use pork_proto::protocol::PorkChildStatus;
+
 #[cfg(unix)]
 use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
@@ -49,6 +51,7 @@ struct ProcessEntry {
     managed_name: Option<String>,
     control_codec: PorkControlCodec,
     spec: ProcessSpec,
+    status: PorkChildStatus,
 }
 
 impl Default for ProcessOrchestrator {
@@ -189,6 +192,7 @@ impl ProcessOrchestrator {
                 managed_name: managed_name.clone(),
                 control_codec,
                 spec,
+                status: PorkChildStatus::Running,
             };
 
             let mut processes = self.inner.processes.lock().await;
@@ -229,11 +233,35 @@ impl ProcessOrchestrator {
         Ok(())
     }
 
+    /// Returns the current lifecycle status of the managed process identified by `process_id`.
+    pub async fn process_status(&self, process_id: ProcessId) -> Result<PorkChildStatus> {
+        let processes = self.inner.processes.lock().await;
+        let entry = processes
+            .get(&process_id)
+            .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
+        Ok(entry.status)
+    }
+
+    /// Returns the current lifecycle status of the managed process identified by `name`.
+    pub async fn process_status_by_name(&self, name: &str) -> Result<PorkChildStatus> {
+        let process_id = {
+            let process_names = self.inner.process_names.lock().await;
+            process_names
+                .get(name)
+                .copied()
+                .ok_or_else(|| OrchestratorError::ProcessNameNotFound(name.to_owned()))?
+        };
+
+        self.process_status(process_id).await
+    }
+
     /// Requests a graceful shutdown for the managed process identified by `process_id`.
     ///
     /// This sends the shared Pork control message over IPC and, on Unix, also
     /// sends `SIGTERM` to the process.
     pub async fn request_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
+        self.set_process_status(process_id, PorkChildStatus::Stopping)
+            .await?;
         self.request_ipc_graceful_shutdown(process_id).await?;
         self.request_unix_graceful_shutdown(process_id).await?;
         Ok(())
@@ -317,11 +345,16 @@ impl ProcessOrchestrator {
     /// This removes the process from the orchestrator, attempts to kill it, waits
     /// for the child to exit, and then cleans up background forwarding state.
     pub async fn stop_process(&self, process_id: ProcessId) -> Result<ExitStatus> {
+        self.set_process_status(process_id, PorkChildStatus::Stopping)
+            .await?;
+
         let mut entry = {
             let mut processes = self.inner.processes.lock().await;
-            processes
+            let mut entry = processes
                 .remove(&process_id)
-                .ok_or(OrchestratorError::ProcessNotFound(process_id))?
+                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
+            entry.status = PorkChildStatus::Stopped;
+            entry
         };
 
         let _ = entry.child.kill().await;
@@ -342,9 +375,11 @@ impl ProcessOrchestrator {
     ) -> Result<ExitStatus> {
         let entry = {
             let mut processes = self.inner.processes.lock().await;
-            processes
+            let mut entry = processes
                 .remove(&process_id)
-                .ok_or(OrchestratorError::ProcessNotFound(process_id))?
+                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
+            entry.status = PorkChildStatus::Stopped;
+            entry
         };
 
         if let Some(process_name) = &entry.managed_name {
@@ -369,6 +404,19 @@ impl ProcessOrchestrator {
         processes.insert(process_id, entry);
 
         Ok(status)
+    }
+
+    async fn set_process_status(
+        &self,
+        process_id: ProcessId,
+        status: PorkChildStatus,
+    ) -> Result<()> {
+        let mut processes = self.inner.processes.lock().await;
+        let entry = processes
+            .get_mut(&process_id)
+            .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
+        entry.status = status;
+        Ok(())
     }
 
     /// Returns the ids of all currently managed processes.
