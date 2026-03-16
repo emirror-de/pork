@@ -40,8 +40,8 @@ pub struct ProcessOrchestrator {
 struct OrchestratorInner {
     next_process_id: AtomicU64,
     graceful_shutdown_timeout: Duration,
-    processes: tokio::sync::Mutex<HashMap<ProcessId, ProcessEntry>>,
-    process_names: tokio::sync::Mutex<HashMap<String, ProcessId>>,
+    processes: tokio::sync::RwLock<HashMap<ProcessId, ProcessEntry>>,
+    process_names: tokio::sync::RwLock<HashMap<String, ProcessId>>,
 }
 
 #[derive(Debug)]
@@ -90,7 +90,7 @@ impl ProcessOrchestrator {
     /// timeout and then starts a new process using the original [`ProcessSpec`].
     pub async fn restart_process(&self, process_id: ProcessId) -> Result<ManagedChild> {
         let spec = {
-            let processes = self.inner.processes.lock().await;
+            let processes = self.inner.processes.read().await;
             let entry = processes
                 .get(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -111,7 +111,7 @@ impl ProcessOrchestrator {
         timeout: Duration,
     ) -> Result<ManagedChild> {
         let spec = {
-            let processes = self.inner.processes.lock().await;
+            let processes = self.inner.processes.read().await;
             let entry = processes
                 .get(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -134,7 +134,7 @@ impl ProcessOrchestrator {
         let process_id = self.inner.next_process_id.fetch_add(1, Ordering::Relaxed);
 
         if reserve_name && let Some(process_name) = &managed_name {
-            let mut process_names = self.inner.process_names.lock().await;
+            let mut process_names = self.inner.process_names.write().await;
 
             if process_names.contains_key(process_name) {
                 return Err(OrchestratorError::DuplicateProcessName(
@@ -195,11 +195,11 @@ impl ProcessOrchestrator {
                 status: PorkChildStatus::Running,
             };
 
-            let mut processes = self.inner.processes.lock().await;
+            let mut processes = self.inner.processes.write().await;
             processes.insert(process_id, entry);
 
             if let Some(process_name) = &managed_name {
-                let mut process_names = self.inner.process_names.lock().await;
+                let mut process_names = self.inner.process_names.write().await;
                 process_names.insert(process_name.clone(), process_id);
             }
 
@@ -211,7 +211,7 @@ impl ProcessOrchestrator {
             && reserve_name
             && let Some(process_name) = &managed_name
         {
-            if let Ok(mut process_names) = self.inner.process_names.try_lock() {
+            if let Ok(mut process_names) = self.inner.process_names.try_write() {
                 process_names.remove(process_name);
             }
         }
@@ -222,7 +222,7 @@ impl ProcessOrchestrator {
     /// Sends a raw IPC payload to the managed process identified by `process_id`.
     pub async fn send(&self, process_id: ProcessId, message: Vec<u8>) -> Result<()> {
         let sender = {
-            let processes = self.inner.processes.lock().await;
+            let processes = self.inner.processes.read().await;
             let entry = processes
                 .get(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -235,7 +235,7 @@ impl ProcessOrchestrator {
 
     /// Returns the current lifecycle status of the managed process identified by `process_id`.
     pub async fn process_status(&self, process_id: ProcessId) -> Result<PorkChildStatus> {
-        let processes = self.inner.processes.lock().await;
+        let processes = self.inner.processes.read().await;
         let entry = processes
             .get(&process_id)
             .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -245,7 +245,7 @@ impl ProcessOrchestrator {
     /// Returns the current lifecycle status of the managed process identified by `name`.
     pub async fn process_status_by_name(&self, name: &str) -> Result<PorkChildStatus> {
         let process_id = {
-            let process_names = self.inner.process_names.lock().await;
+            let process_names = self.inner.process_names.read().await;
             process_names
                 .get(name)
                 .copied()
@@ -298,7 +298,7 @@ impl ProcessOrchestrator {
 
     async fn request_ipc_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
         let (sender, codec) = {
-            let processes = self.inner.processes.lock().await;
+            let processes = self.inner.processes.read().await;
             let entry = processes
                 .get(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -315,7 +315,7 @@ impl ProcessOrchestrator {
     #[cfg(unix)]
     async fn request_unix_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
         let raw_pid = {
-            let processes = self.inner.processes.lock().await;
+            let processes = self.inner.processes.read().await;
             let entry = processes
                 .get(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -345,7 +345,7 @@ impl ProcessOrchestrator {
             .await?;
 
         let mut entry = {
-            let mut processes = self.inner.processes.lock().await;
+            let mut processes = self.inner.processes.write().await;
             let mut entry = processes
                 .remove(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -357,7 +357,7 @@ impl ProcessOrchestrator {
         let status = entry.child.wait().await?;
 
         if let Some(process_name) = &entry.managed_name {
-            let mut process_names = self.inner.process_names.lock().await;
+            let mut process_names = self.inner.process_names.write().await;
             process_names.remove(process_name);
         }
 
@@ -370,7 +370,7 @@ impl ProcessOrchestrator {
         status: ExitStatus,
     ) -> Result<ExitStatus> {
         let entry = {
-            let mut processes = self.inner.processes.lock().await;
+            let mut processes = self.inner.processes.write().await;
             let mut entry = processes
                 .remove(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -379,7 +379,7 @@ impl ProcessOrchestrator {
         };
 
         if let Some(process_name) = &entry.managed_name {
-            let mut process_names = self.inner.process_names.lock().await;
+            let mut process_names = self.inner.process_names.write().await;
             process_names.remove(process_name);
         }
 
@@ -388,7 +388,7 @@ impl ProcessOrchestrator {
 
     async fn wait_for_exit(&self, process_id: ProcessId) -> Result<ExitStatus> {
         let mut entry = {
-            let mut processes = self.inner.processes.lock().await;
+            let mut processes = self.inner.processes.write().await;
             processes
                 .remove(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?
@@ -396,7 +396,7 @@ impl ProcessOrchestrator {
 
         let status = entry.child.wait().await?;
 
-        let mut processes = self.inner.processes.lock().await;
+        let mut processes = self.inner.processes.write().await;
         processes.insert(process_id, entry);
 
         Ok(status)
@@ -407,7 +407,7 @@ impl ProcessOrchestrator {
         process_id: ProcessId,
         status: PorkChildStatus,
     ) -> Result<()> {
-        let mut processes = self.inner.processes.lock().await;
+        let mut processes = self.inner.processes.write().await;
         let entry = processes
             .get_mut(&process_id)
             .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
@@ -417,25 +417,25 @@ impl ProcessOrchestrator {
 
     /// Returns the ids of all currently managed processes.
     pub async fn process_ids(&self) -> Result<Vec<ProcessId>> {
-        let processes = self.inner.processes.lock().await;
+        let processes = self.inner.processes.read().await;
         Ok(processes.keys().copied().collect())
     }
 
     /// Looks up a managed process id by name.
     pub async fn process_id_by_name(&self, name: &str) -> Result<Option<ProcessId>> {
-        let process_names = self.inner.process_names.lock().await;
+        let process_names = self.inner.process_names.read().await;
         Ok(process_names.get(name).copied())
     }
 
     /// Returns `true` when a managed process with the given name exists.
     pub async fn has_process_name(&self, name: &str) -> Result<bool> {
-        let process_names = self.inner.process_names.lock().await;
+        let process_names = self.inner.process_names.read().await;
         Ok(process_names.contains_key(name))
     }
 
     /// Returns the managed names currently registered with the orchestrator.
     pub async fn process_names(&self) -> Result<Vec<String>> {
-        let process_names = self.inner.process_names.lock().await;
+        let process_names = self.inner.process_names.read().await;
         Ok(process_names.keys().cloned().collect())
     }
 }
@@ -475,8 +475,8 @@ impl ProcessOrchestratorBuilder {
             inner: Arc::new(OrchestratorInner {
                 next_process_id: AtomicU64::new(1),
                 graceful_shutdown_timeout: self.graceful_shutdown_timeout,
-                processes: tokio::sync::Mutex::new(HashMap::new()),
-                process_names: tokio::sync::Mutex::new(HashMap::new()),
+                processes: tokio::sync::RwLock::new(HashMap::new()),
+                process_names: tokio::sync::RwLock::new(HashMap::new()),
             }),
         }
     }
