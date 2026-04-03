@@ -1,4 +1,7 @@
 /target
 
+**/.DS_Store
 .direnv
+.ai-workspace
 .rules
+AGENTS.md
