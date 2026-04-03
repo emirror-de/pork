@@ -1,5 +1,5 @@
-use pork::DEFAULT_BOOTSTRAP_ENV;
 use pork::spec::ProcessSpec;
+use pork::DEFAULT_BOOTSTRAP_ENV;
 use pork_proto::protocol::PorkControlCodec;
 
 #[test]
@@ -13,7 +13,9 @@ fn process_spec_exposes_configured_fields_through_accessors() {
         .envs([("PORK_REGION", "local"), ("PORK_LOG_LEVEL", "debug")])
         .bootstrap_env("CUSTOM_BOOTSTRAP_ENV")
         .capture_stdout(true)
-        .capture_stderr(true);
+        .capture_stderr(true)
+        .depends_on("upstream-service")
+        .depends_on_all(["database", "cache"]);
 
     assert_eq!(
         spec.executable().as_os_str(),
@@ -41,6 +43,10 @@ fn process_spec_exposes_configured_fields_through_accessors() {
     assert_eq!(spec.bootstrap_env_ref(), "CUSTOM_BOOTSTRAP_ENV");
     assert!(spec.captures_stdout());
     assert!(spec.captures_stderr());
+    assert_eq!(
+        spec.depends_on_ref(),
+        ["upstream-service", "database", "cache"]
+    );
 }
 
 #[test]
@@ -59,6 +65,7 @@ fn process_spec_defaults_are_predictable_and_documented() {
     assert_eq!(spec.bootstrap_env_ref(), DEFAULT_BOOTSTRAP_ENV);
     assert!(!spec.captures_stdout());
     assert!(!spec.captures_stderr());
+    assert!(spec.depends_on_ref().is_empty());
 }
 
 #[test]

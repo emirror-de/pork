@@ -29,6 +29,14 @@ pub enum OrchestratorError {
     UnsupportedControlCodec(String),
     /// Internal shared state was poisoned by a panic while holding a lock.
     LockPoisoned(&'static str),
+    /// One or more declared dependencies did not reach `Running` within the
+    /// configured timeout. The inner `Vec` contains the names that timed out.
+    DependencyTimeout(Vec<String>),
+    /// A dependency cycle was detected among the declared `depends_on` names.
+    /// The inner `Vec` contains the names that form the cycle.
+    DependencyCycle(Vec<String>),
+    /// A declared dependency name is not registered with the orchestrator.
+    DependencyNotFound(String),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -49,6 +57,22 @@ impl fmt::Display for OrchestratorError {
                 write!(f, "unsupported control codec '{codec}'")
             }
             Self::LockPoisoned(name) => write!(f, "lock poisoned: {name}"),
+            Self::DependencyTimeout(names) => {
+                write!(
+                    f,
+                    "dependencies did not become ready within the timeout: {}",
+                    names.join(", ")
+                )
+            }
+            Self::DependencyCycle(names) => {
+                write!(f, "dependency cycle detected among: {}", names.join(", "))
+            }
+            Self::DependencyNotFound(name) => {
+                write!(
+                    f,
+                    "declared dependency '{name}' is not registered with the orchestrator"
+                )
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 /// Managed child process handles and child-facing interaction types.
 pub mod managed_child;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +25,11 @@ pub use managed_child::ManagedChild;
 
 const DEFAULT_MESSAGE_BUFFER_SIZE: usize = 1024;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default time the orchestrator waits for declared dependencies to reach
+/// [`PorkChildStatus::Running`] before returning [`OrchestratorError::DependencyTimeout`].
+const DEFAULT_DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Interval between dependency-readiness polls while waiting.
+const DEPENDENCY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Coordinates child-process startup, messaging, lookup, restart, and shutdown.
 ///
@@ -40,6 +45,8 @@ pub struct ProcessOrchestrator {
 struct OrchestratorInner {
     next_process_id: AtomicU64,
     graceful_shutdown_timeout: Duration,
+    /// Maximum time to wait for declared dependencies to reach `Running`.
+    dependency_timeout: Duration,
     processes: tokio::sync::RwLock<HashMap<ProcessId, ProcessEntry>>,
     process_names: tokio::sync::RwLock<HashMap<String, ProcessId>>,
 }
@@ -74,6 +81,12 @@ impl ProcessOrchestrator {
     /// Returns the default timeout used for graceful shutdown operations.
     pub fn graceful_shutdown_timeout(&self) -> Duration {
         self.inner.graceful_shutdown_timeout
+    }
+
+    /// Returns the default timeout used when waiting for declared dependencies
+    /// to reach [`PorkChildStatus::Running`].
+    pub fn dependency_timeout(&self) -> Duration {
+        self.inner.dependency_timeout
     }
 
     /// Starts a new managed child process from the given [`ProcessSpec`].
@@ -143,6 +156,24 @@ impl ProcessOrchestrator {
             }
 
             process_names.insert(process_name.clone(), process_id);
+        }
+
+        // Validate declared dependencies and wait for them to become Running,
+        // using the orchestrator's configured dependency timeout.
+        if !spec.depends_on.is_empty() {
+            // Eagerly reject any name that has never been registered so callers
+            // get a clear error instead of silently timing out.
+            self.check_dependencies_known(&spec.depends_on).await?;
+
+            // Detect cycles before blocking: if this process has a name, check
+            // that none of its transitive dependencies eventually declare a
+            // dependency back on it.
+            if let Some(ref name) = managed_name {
+                self.check_dependency_cycle(name, &spec.depends_on).await?;
+            }
+
+            let timeout = self.inner.dependency_timeout;
+            self.wait_for_dependencies(&spec.depends_on, timeout).await?;
         }
 
         let start_result = async {
@@ -217,6 +248,92 @@ impl ProcessOrchestrator {
         }
 
         start_result
+    }
+
+    /// Returns an error if any name in `deps` is not currently registered.
+    async fn check_dependencies_known(&self, deps: &[String]) -> Result<()> {
+        let process_names = self.inner.process_names.read().await;
+        for name in deps {
+            if !process_names.contains_key(name) {
+                return Err(OrchestratorError::DependencyNotFound(name.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// DFS cycle check: starting from `root`, walk the `depends_on` lists of
+    /// every reachable process and report an error if `root` is encountered.
+    async fn check_dependency_cycle(&self, root: &str, deps: &[String]) -> Result<()> {
+        let processes = self.inner.processes.read().await;
+
+        let mut stack: Vec<&str> = deps.iter().map(String::as_str).collect();
+        let mut visited: HashSet<&str> = HashSet::new();
+
+        while let Some(current) = stack.pop() {
+            if current == root {
+                // Collect the full cycle set for a useful error message.
+                let cycle: Vec<String> = deps
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(root.to_owned()))
+                    .collect();
+                return Err(OrchestratorError::DependencyCycle(cycle));
+            }
+
+            if !visited.insert(current) {
+                continue;
+            }
+
+            // Walk into transitive dependencies stored in the retained spec.
+            let transitive = processes
+                .values()
+                .find(|e| e.managed_name.as_deref() == Some(current))
+                .map(|e| e.spec.depends_on.as_slice())
+                .unwrap_or(&[]);
+
+            for dep in transitive {
+                stack.push(dep.as_str());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Polls every name in `deps` until all report [`PorkChildStatus::Running`]
+    /// or `timeout` elapses.
+    async fn wait_for_dependencies(&self, deps: &[String], timeout: Duration) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+
+        loop {
+            let mut not_ready: Vec<String> = Vec::new();
+
+            {
+                let processes = self.inner.processes.read().await;
+                let process_names = self.inner.process_names.read().await;
+
+                for name in deps {
+                    let ready = process_names
+                        .get(name)
+                        .and_then(|id| processes.get(id))
+                        .map(|e| e.status == PorkChildStatus::Running)
+                        .unwrap_or(false);
+
+                    if !ready {
+                        not_ready.push(name.clone());
+                    }
+                }
+            }
+
+            if not_ready.is_empty() {
+                return Ok(());
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Err(OrchestratorError::DependencyTimeout(not_ready));
+            }
+
+            tokio::time::sleep(DEPENDENCY_POLL_INTERVAL).await;
+        }
     }
 
     /// Sends a raw IPC payload to the managed process identified by `process_id`.
@@ -445,6 +562,7 @@ impl ProcessOrchestrator {
 pub struct ProcessOrchestratorBuilder {
     message_buffer_size: usize,
     graceful_shutdown_timeout: Duration,
+    dependency_timeout: Duration,
 }
 
 impl Default for ProcessOrchestratorBuilder {
@@ -452,6 +570,7 @@ impl Default for ProcessOrchestratorBuilder {
         Self {
             message_buffer_size: DEFAULT_MESSAGE_BUFFER_SIZE,
             graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
+            dependency_timeout: DEFAULT_DEPENDENCY_TIMEOUT,
         }
     }
 }
@@ -469,12 +588,20 @@ impl ProcessOrchestratorBuilder {
         self
     }
 
+    /// Sets the default timeout used when waiting for declared dependencies
+    /// to reach [`PorkChildStatus::Running`] before spawning a dependent process.
+    pub fn dependency_timeout(mut self, value: Duration) -> Self {
+        self.dependency_timeout = value;
+        self
+    }
+
     /// Builds a [`ProcessOrchestrator`] from the current builder configuration.
     pub fn build(self) -> ProcessOrchestrator {
         ProcessOrchestrator {
             inner: Arc::new(OrchestratorInner {
                 next_process_id: AtomicU64::new(1),
                 graceful_shutdown_timeout: self.graceful_shutdown_timeout,
+                dependency_timeout: self.dependency_timeout,
                 processes: tokio::sync::RwLock::new(HashMap::new()),
                 process_names: tokio::sync::RwLock::new(HashMap::new()),
             }),
