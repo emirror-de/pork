@@ -21,6 +21,10 @@ pub struct ProcessSpec {
     pub(crate) bootstrap_env: String,
     pub(crate) capture_stdout: bool,
     pub(crate) capture_stderr: bool,
+    /// Managed names of processes that must be [`PorkChildStatus::Running`] before
+    /// this process is spawned. All names must be registered with the same
+    /// [`crate::orchestrator::ProcessOrchestrator`].
+    pub(crate) depends_on: Vec<String>,
 }
 
 impl ProcessSpec {
@@ -40,6 +44,7 @@ impl ProcessSpec {
             bootstrap_env: DEFAULT_BOOTSTRAP_ENV.to_owned(),
             capture_stdout: false,
             capture_stderr: false,
+            depends_on: Vec::new(),
         }
     }
 
@@ -183,6 +188,37 @@ impl ProcessSpec {
     pub fn without_output_capture(mut self) -> Self {
         self.capture_stdout = false;
         self.capture_stderr = false;
+        self
+    }
+
+    /// Returns the managed names this process depends on.
+    ///
+    /// All named processes must be [`pork_proto::protocol::PorkChildStatus::Running`]
+    /// before this process is spawned.
+    pub fn depends_on_ref(&self) -> &[String] {
+        &self.depends_on
+    }
+
+    /// Declares that this process depends on the named process.
+    ///
+    /// The orchestrator will wait for every declared dependency to reach
+    /// [`pork_proto::protocol::PorkChildStatus::Running`] before spawning this
+    /// process. Dependencies are identified by their managed name.
+    pub fn depends_on(mut self, name: impl Into<String>) -> Self {
+        self.depends_on.push(name.into());
+        self
+    }
+
+    /// Declares that this process depends on all of the given named processes.
+    ///
+    /// Each name must correspond to a managed process registered with the same
+    /// [`crate::orchestrator::ProcessOrchestrator`].
+    pub fn depends_on_all<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.depends_on.extend(names.into_iter().map(Into::into));
         self
     }
 }
