@@ -20,7 +20,7 @@ This repository uses a workspace-first layout:
 - repository root — shared workspace files, Nix development setup, and top-level documentation
 - `pork/` — main `pork` library crate
 - `pork-proto/` — shared protocol crate
-- `examples/pork-comms/` — small host/child example showing typed message exchange
+- `examples/pork-comms/` — end-to-end host/child example showing typed messages, codec selection, and child status reporting
 
 This keeps the workspace root focused on coordination while each crate owns its own manifest, source tree, and tests.
 
@@ -35,12 +35,37 @@ A typical setup has two sides:
 
 1. A **host** process creates a `pork::orchestrator::ProcessOrchestrator` and starts a child from a `pork::spec::ProcessSpec`.
 2. A **child** process reads bootstrap information from the environment and connects back to the host with `pork::child::bootstrap`.
-3. Both sides exchange raw `Vec<u8>` payloads through `pork`.
-4. Shared control messages, typed IPC envelopes, and codec selection live in `pork_proto::protocol`.
+3. Both sides exchange typed `pork::types::DataPayload` values through `pork`.
+4. Shared control messages, encoded `pork::types::ControlPayload` values, typed IPC envelopes, and codec selection live in `pork_proto::protocol`.
 
 If you only need process orchestration and raw byte transport, depend on `pork`.
 
 If you want typed IPC payloads and the shared codec helpers, depend on both `pork` and `pork-proto`.
+
+## Feature flags and dual-channel architecture
+
+`pork` uses feature flags to enable host-side and child-side APIs:
+- `host` (default) — host APIs for process management
+- `client` (default: off) — child APIs for bootstrap and connection
+
+With both features enabled, `pork` establishes two IPC channels:
+1. **Data channel** — application payloads
+2. **Control channel** — codec-encoded framework messages (`GracefulShutdown`, `Restart`, status updates)
+
+On the child side, `ChildBootstrap::connect` provides one API surface with two independent
+receive workers (`recv_data` and `recv_control`). Heavy data traffic therefore cannot block
+control-plane reception.
+
+`ProcessSpecBuilder` configures the bootstrap environment-variable names and optional
+managed child name before producing an immutable `ProcessSpec`:
+- builder setters: `data_bootstrap_env(...)`, `control_bootstrap_env(...)`, and `managed_name(...)`
+- `ProcessSpec` accessors: `data_bootstrap_env_ref()`, `control_bootstrap_env_ref()`, and `managed_name()`
+
+The orchestrator reads those values when spawning the child, and `ChildBootstrap::from_env`
+expects both bootstrap variable names. In the common case, use the default `ProcessSpecBuilder`
+settings on the host and `ChildBootstrap::from_default_env()` on the child.
+
+See `pork/src/host.rs` for `HostBootstrap` and `pork/src/child/bootstrap.rs` for `ChildBootstrap` documentation.
 
 ## Where to look next
 
@@ -100,9 +125,14 @@ A typical workflow has three parts:
 
 1. define how the child process should be started with `pork::spec::ProcessSpec`
 2. start and manage the child from `pork::orchestrator::ProcessOrchestrator`
-3. connect from the child side with `pork::child::bootstrap::child_connect_from_env`
+3. connect from the child side with `pork::child::bootstrap::ChildBootstrap`
 
 For a complete typed example, see `examples/pork-comms/`.
+
+For heartbeat-based child status reporting, combine `ChildBootstrap` with
+`pork::child::status_reporter::StatusReporter` in the child process and query the latest
+child-reported status from the host with `ProcessOrchestrator::child_status` or
+`ProcessOrchestrator::child_status_by_name`.
 
 ## Quick example workflow
 
@@ -116,14 +146,15 @@ async fn run_host() -> Result<(), pork::error::OrchestratorError> {
     let orchestrator = ProcessOrchestrator::new();
     let child = orchestrator
         .start_process(
-            ProcessSpec::new("./child-binary")
+            ProcessSpec::builder("./child-binary")
                 .managed_name("worker")
-                .capture_output(),
+                .log_output("./worker.log")
+                .build(),
         )
         .await?;
 
-    child.send(b"ping".to_vec())?;
-    let _status = orchestrator.graceful_shutdown_process(child.id()).await?;
+    child.send("ping")?;
+    let _status = orchestrator.graceful_shutdown_process(child.process_id()).await?;
     Ok(())
 }
 ```
@@ -131,12 +162,16 @@ async fn run_host() -> Result<(), pork::error::OrchestratorError> {
 Child side sketch:
 
 ```rust
-use pork::child::bootstrap::child_connect_from_env;
-use pork::DEFAULT_BOOTSTRAP_ENV;
+use pork::child::bootstrap::ChildBootstrap;
 
 async fn run_child() -> Result<(), pork::error::OrchestratorError> {
-    let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
-    let _ = (from_host, to_host);
+    let channels = ChildBootstrap::from_default_env()?.connect().await?;
+
+    channels.send_data("ready")?;
+    while let Some(payload) = channels.recv_data().await {
+        let _ = payload;
+    }
+
     Ok(())
 }
 ```
@@ -149,7 +184,7 @@ Formatting and lints
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 Tests and docs
@@ -198,6 +233,7 @@ The `examples/pork-comms/` crate demonstrates a small end-to-end setup with:
 - a child binary
 - typed messages encoded with `pork-proto`
 - coverage for both JSON and Postcard codec flows
+- child-to-host status reporting over the control channel
 
 Use that example when you want a concrete reference before integrating `pork` into your own application.
 
@@ -205,45 +241,35 @@ Use that example when you want a concrete reference before integrating `pork` in
 
 ## Release status & publishing
 
-This workspace is prepared for the `1.0.0` release line: the main orchestration API lives in the `pork` crate, while shared protocol details live in `pork-proto`.
+This workspace is prepared for the `2.0.0` release line: the main orchestration API lives in the `pork` crate, while shared protocol details live in `pork-proto`.
 
-Before publishing, ensure CI is green and perform these validation steps locally (see the `Validate locally` section above). Publishing tips:
+Before publishing, ensure CI is green and perform these validation steps locally (see the `Validate locally` section above).
 
-- Identify which workspace crates are intended for crates.io (libraries) and which are examples or tools (set those to `publish = false`).
-- Crates that depend on `path = "..."` dependencies must be published in topological order. Typical sequence:
-  1. Publish the low-level crate (e.g. `pork-proto`) first: `cargo publish -p pork-proto` (use `--dry-run` to validate).
-  2. Update dependent crates to use the published version instead of `path = ...` and bump their versions.
-  3. Publish the dependent crate (e.g. `pork`).
+The publish order is:
+1. `pork-proto`
+2. `pork`
 
-Recommended pre-publish commands (examples)
+The workspace currently uses a local path dependency from `pork` to `pork-proto` together with the matching published version requirement. Validate both crates with dry runs first, then publish in that order.
+
+Recommended pre-publish commands
 
 ```sh
-# dry-run packaging and publish for pork-proto
 cargo package --manifest-path pork-proto/Cargo.toml
 cargo publish --dry-run -p pork-proto
-
-# publish pork-proto, then update dependent manifests and publish pork
-cargo publish -p pork-proto
-# update pork/Cargo.toml to depend on the published pork-proto version (remove path dep)
 cargo package --manifest-path pork/Cargo.toml
 cargo publish --dry-run -p pork
-cargo publish -p pork
-
-# tag and create a GitHub release
-git tag -a vX.Y.Z -m "Release vX.Y.Z"
-git push origin vX.Y.Z
-# (optional, using GitHub CLI)
-gh release create vX.Y.Z --notes-file CHANGELOG.md
 ```
 
 ## Where we enforce CI
 
 CI is defined in `.github/workflows/ci.yml` and runs the following gates on PRs and pushes to release branches:
 
-- formatting (`cargo fmt --check`)
-- clippy (`cargo clippy`)
-- unit tests (`cargo test`)
-- documentation tests (`cargo test --doc`)
+- formatting (`cargo fmt --all -- --check`)
+- clippy (`cargo clippy --workspace --all-targets -- -D warnings`)
+- workspace tests (`cargo test --workspace`)
+- all-features and all-targets tests (`cargo test --workspace --all-features --all-targets`)
+- feature-matrix checks for `pork` and `pork-proto`
+- documentation tests (`cargo test --workspace --all-features --doc`)
 - MSRV compile check (Rust 1.85)
 - security and license checks (`cargo audit`, `cargo deny check`)
 - `nix flake check`
@@ -252,7 +278,3 @@ CI is defined in `.github/workflows/ci.yml` and runs the following gates on PRs 
 
 - See `pork/src/lib.rs` and `pork-proto/src/lib.rs` for crate-level documentation and examples.
 - Look at `.github/workflows/ci.yml` for the exact CI jobs and expected checks.
-
----
-
-If you want, I can also add a `RELEASE.md` that codifies the publishing sequence and the exact git commands to use during a release.  

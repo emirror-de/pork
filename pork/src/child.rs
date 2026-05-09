@@ -1,11 +1,9 @@
 /// Child-side bootstrap helpers and shared child process setup.
 ///
-/// This module contains the functions a managed child process uses to:
+/// This module contains the functions and types a managed child process uses to:
 /// - read bootstrap information from the environment,
-/// - resolve the configured control-message codec,
-/// - and connect back to the parent over IPC.
+/// - connect back to the parent over IPC for both data and control traffic,
+/// - report lifecycle status over the encoded control channel.
 pub mod bootstrap;
-
-pub use bootstrap::{
-    child_bootstrap_env_value, child_connect, child_connect_from_env, child_control_codec_from_env,
-};
+/// Automatic status reporter for sending periodic heartbeat updates to the parent.
+pub mod status_reporter;

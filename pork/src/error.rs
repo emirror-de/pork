@@ -1,42 +1,46 @@
 use std::fmt;
 
 use ipc_channel::IpcError;
+use pork_proto::protocol::PorkProtoCodecError;
+
+use crate::types::{BootstrapEnvName, ManagedChildName, ProcessId};
 
 /// Convenience result type used throughout the `pork` orchestration API.
 pub type Result<T> = std::result::Result<T, OrchestratorError>;
 
-/// Stable identifier assigned to a managed child process.
-pub type ProcessId = u64;
-
-/// Errors returned by process orchestration, bootstrap, and IPC operations.
+/// Errors returned by the process orchestration API.
 #[derive(Debug)]
 pub enum OrchestratorError {
-    /// An I/O operation failed while spawning, stopping, or signaling a child process.
+    /// I/O error.
     Io(std::io::Error),
-    /// An IPC channel operation failed.
+    /// IPC error.
     Ipc(IpcError),
-    /// No managed process exists for the given process ID.
+    /// Child process with the given id was not found.
     ProcessNotFound(ProcessId),
-    /// No managed process exists for the given process name.
-    ProcessNameNotFound(String),
-    /// A process was started with a name that is already registered.
-    DuplicateProcessName(String),
-    /// The child process could not read its bootstrap environment variable.
+    /// Child process with the given managed name was not found.
+    ProcessNameNotFound(ManagedChildName),
+    /// A managed name was already registered for another child process.
+    DuplicateProcessName(ManagedChildName),
+    /// Required bootstrap environment variable was missing.
+    MissingBootstrapEnv(BootstrapEnvName),
+    /// Required bootstrap value was expected but not present.
     MissingBootstrapValue,
-    /// The child process could not read the control codec environment variable.
+    /// Required control codec environment variable was missing.
     MissingControlCodec,
-    /// The configured control codec value is not supported.
+    /// The provided control codec value is not supported.
     UnsupportedControlCodec(String),
-    /// Internal shared state was poisoned by a panic while holding a lock.
-    LockPoisoned(&'static str),
-    /// One or more declared dependencies did not reach `Running` within the
-    /// configured timeout. The inner `Vec` contains the names that timed out.
-    DependencyTimeout(Vec<String>),
-    /// A dependency cycle was detected among the declared `depends_on` names.
-    /// The inner `Vec` contains the names that form the cycle.
-    DependencyCycle(Vec<String>),
-    /// A declared dependency name is not registered with the orchestrator.
-    DependencyNotFound(String),
+    /// The configured control codec could not encode or decode a control message.
+    ControlCodec(PorkProtoCodecError),
+    /// Timed out waiting for a child process to shut down gracefully.
+    GracefulShutdownTimeout(ProcessId),
+    /// Timed out waiting for one or more dependencies to become ready.
+    DependencyTimeout(Vec<ManagedChildName>),
+    /// A declared dependency is not known to the orchestrator.
+    UnknownDependency(ManagedChildName),
+    /// A declared dependency name was not found in the registry.
+    DependencyNotFound(ManagedChildName),
+    /// A dependency cycle was detected in the managed-child graph.
+    DependencyCycle(Vec<ManagedChildName>),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -44,40 +48,58 @@ impl fmt::Display for OrchestratorError {
         match self {
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Ipc(error) => write!(f, "ipc error: {error}"),
-            Self::ProcessNotFound(process_id) => write!(f, "process not found: {process_id}"),
-            Self::ProcessNameNotFound(name) => {
-                write!(f, "managed process with name '{name}' was not found")
+            Self::ProcessNotFound(process_id) => {
+                write!(f, "process with id {process_id} not found")
             }
+            Self::ProcessNameNotFound(name) => write!(f, "process with name {name} not found"),
             Self::DuplicateProcessName(name) => {
-                write!(f, "managed process with name '{name}' already exists")
+                write!(f, "process with name {name} already exists")
             }
-            Self::MissingBootstrapValue => write!(f, "missing bootstrap environment value"),
-            Self::MissingControlCodec => write!(f, "missing control codec environment value"),
-            Self::UnsupportedControlCodec(codec) => {
-                write!(f, "unsupported control codec '{codec}'")
+            Self::MissingBootstrapEnv(name) => {
+                write!(f, "missing bootstrap environment variable {name}")
             }
-            Self::LockPoisoned(name) => write!(f, "lock poisoned: {name}"),
+            Self::MissingBootstrapValue => write!(f, "missing bootstrap value"),
+            Self::MissingControlCodec => write!(f, "missing control codec"),
+            Self::UnsupportedControlCodec(value) => {
+                write!(f, "unsupported control codec: {value}")
+            }
+            Self::ControlCodec(error) => write!(f, "control codec error: {error}"),
+            Self::GracefulShutdownTimeout(process_id) => {
+                write!(f, "timed out waiting for process {process_id} to shut down")
+            }
             Self::DependencyTimeout(names) => {
-                write!(
-                    f,
-                    "dependencies did not become ready within the timeout: {}",
-                    names.join(", ")
-                )
+                write!(f, "timed out waiting for dependencies: {names:?}")
             }
+            Self::UnknownDependency(name) => write!(f, "unknown dependency: {name}"),
+            Self::DependencyNotFound(name) => write!(f, "dependency not found: {name}"),
             Self::DependencyCycle(names) => {
-                write!(f, "dependency cycle detected among: {}", names.join(", "))
-            }
-            Self::DependencyNotFound(name) => {
-                write!(
-                    f,
-                    "declared dependency '{name}' is not registered with the orchestrator"
-                )
+                write!(f, "dependency cycle detected involving {names:?}")
             }
         }
     }
 }
 
-impl std::error::Error for OrchestratorError {}
+impl std::error::Error for OrchestratorError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Ipc(error) => Some(error),
+            Self::ControlCodec(error) => Some(error),
+            Self::ProcessNotFound(_)
+            | Self::ProcessNameNotFound(_)
+            | Self::DuplicateProcessName(_)
+            | Self::MissingBootstrapEnv(_)
+            | Self::MissingBootstrapValue
+            | Self::MissingControlCodec
+            | Self::UnsupportedControlCodec(_)
+            | Self::GracefulShutdownTimeout(_)
+            | Self::DependencyTimeout(_)
+            | Self::UnknownDependency(_)
+            | Self::DependencyNotFound(_)
+            | Self::DependencyCycle(_) => None,
+        }
+    }
+}
 
 impl From<std::io::Error> for OrchestratorError {
     fn from(value: std::io::Error) -> Self {
@@ -88,5 +110,11 @@ impl From<std::io::Error> for OrchestratorError {
 impl From<IpcError> for OrchestratorError {
     fn from(value: IpcError) -> Self {
         Self::Ipc(value)
+    }
+}
+
+impl From<PorkProtoCodecError> for OrchestratorError {
+    fn from(value: PorkProtoCodecError) -> Self {
+        Self::ControlCodec(value)
     }
 }

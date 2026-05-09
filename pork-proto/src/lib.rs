@@ -2,7 +2,7 @@
 //!
 //! This crate defines the control-plane messages exchanged between a parent
 //! process and a managed child process, plus optional built-in codecs for
-//! serializing those messages.
+//! serializing those messages on the dedicated control channel.
 //!
 //! # What this crate gives you
 //!
@@ -31,27 +31,40 @@
 //!     command: String,
 //! }
 //!
+//! // Wrap application data without mixing it into the control plane.
 //! let app_message = PorkIpcMessage::Custom(AppMessage {
 //!     command: "ping".to_owned(),
 //! });
 //!
 //! let shutdown = PorkIpcMessage::<AppMessage>::Control(PorkControlMessage::GracefulShutdown);
+//! let restart = PorkIpcMessage::<AppMessage>::Control(PorkControlMessage::Restart);
 //!
 //! assert!(matches!(app_message, PorkIpcMessage::Custom(_)));
 //! assert!(matches!(shutdown, PorkIpcMessage::Control(PorkControlMessage::GracefulShutdown)));
+//! assert!(matches!(restart, PorkIpcMessage::Control(PorkControlMessage::Restart)));
 //! ```
 //!
 //! # Example: encode and decode control messages
 //!
 //! ```rust
+//! # #[cfg(feature = "codec-json")]
+//! # fn main() -> Result<(), pork_proto::protocol::PorkProtoCodecError> {
 //! use pork_proto::protocol::{PorkControlCodec, PorkControlMessage};
 //!
+//! // Host and child must use the same control-message codec.
 //! let codec = PorkControlCodec::Json;
-//! let bytes = codec.encode_control_message(PorkControlMessage::GracefulShutdown)?;
-//! let message = codec.decode_control_message(&bytes)?;
+//! let shutdown = codec.encode_control_message(PorkControlMessage::GracefulShutdown)?;
+//! let restart = codec.encode_restart()?;
 //!
-//! assert_eq!(message, PorkControlMessage::GracefulShutdown);
-//! # Ok::<(), pork_proto::protocol::PorkProtoCodecError>(())
+//! assert_eq!(
+//!     codec.decode_control_message(&shutdown)?,
+//!     PorkControlMessage::GracefulShutdown,
+//! );
+//! assert!(codec.is_restart_message(&restart));
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "codec-json"))]
+//! # fn main() {}
 //! ```
 //!
 //! # Example: serialize your own payload with the JSON codec
@@ -59,7 +72,7 @@
 //! ```rust
 //! # #[cfg(feature = "codec-json")]
 //! # fn main() -> Result<(), pork_proto::protocol::PorkProtoCodecError> {
-//! use pork_proto::codecs::JsonCodec;
+//! use pork_proto::codecs::json::JsonCodec;
 //! use pork_proto::protocol::{PorkCodec, PorkIpcMessage};
 //! use serde::{Deserialize, Serialize};
 //!
@@ -72,12 +85,47 @@
 //!     command: "reload".to_owned(),
 //! });
 //!
+//! // Encode the shared envelope before sending it over the data channel.
 //! let bytes = JsonCodec::encode(&original)?;
 //! let decoded: PorkIpcMessage<AppMessage> = JsonCodec::decode(&bytes)?;
 //!
 //! assert_eq!(decoded, original);
 //! # Ok(())
 //! # }
+//! # #[cfg(not(feature = "codec-json"))]
+//! # fn main() {}
+//! ```
+//!
+//! # Example: host/child control-plane contract
+//!
+//! The host and child must agree on one codec and encode all control-plane
+//! messages (`GracefulShutdown`, `Restart`, `StatusUpdate`) with that codec.
+//!
+//! ```rust
+//! # #[cfg(feature = "codec-json")]
+//! # fn main() -> Result<(), pork_proto::protocol::PorkProtoCodecError> {
+//! use pork_proto::protocol::{PorkChildStatus, PorkControlCodec, PorkControlMessage, PorkStatusUpdate};
+//!
+//! // Status updates travel over the dedicated control channel.
+//! let codec = PorkControlCodec::Json;
+//! let status_payload = codec.encode_control_message(PorkControlMessage::StatusUpdate(
+//!     PorkStatusUpdate {
+//!         status: PorkChildStatus::Running,
+//!         timestamp_ms: 123,
+//!     },
+//! ))?;
+//!
+//! assert!(matches!(
+//!     codec.decode_control_message(&status_payload)?,
+//!     PorkControlMessage::StatusUpdate(PorkStatusUpdate {
+//!         status: PorkChildStatus::Running,
+//!         timestamp_ms: 123,
+//!     })
+//! ));
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "codec-json"))]
+//! # fn main() {}
 //! ```
 //!
 //! # Example: agree on a codec through the environment
@@ -94,6 +142,7 @@
 //!     std::env::set_var(PORK_CONTROL_CODEC_ENV, "postcard");
 //! }
 //!
+//! // The child resolves the codec selected by the parent process.
 //! let codec = control_codec_from_env()?;
 //! assert_eq!(codec, PorkControlCodec::Postcard);
 //!
@@ -112,8 +161,8 @@
 
 /// Feature-gated codec implementations for encoding and decoding
 /// [`protocol::PorkIpcMessage`] payloads through concrete [`protocol::PorkCodec`]
-/// implementations such as [`codecs::JsonCodec`] and
-/// [`codecs::PostcardCodec`].
+/// implementations such as [`codecs::json::JsonCodec`] and
+/// [`codecs::postcard::PostcardCodec`].
 pub mod codecs;
 
 /// Shared protocol models, codec selection, parsing, and environment helpers.
@@ -142,12 +191,33 @@ pub mod protocol {
         Restarting,
     }
 
+    /// Child process status update sent over the control channel.
+    ///
+    /// Contains the current lifecycle state and a child-generated timestamp. Hosts
+    /// may cache or interpret these updates however they choose; `pork` itself stores
+    /// only the latest reported update.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct PorkStatusUpdate {
+        /// Current lifecycle status of the child process.
+        pub status: PorkChildStatus,
+        /// Unix timestamp (milliseconds) when this status update was generated.
+        pub timestamp_ms: u64,
+    }
+
     /// Host-to-child and child-to-host control-plane messages shared by all
     /// Pork-based IPC protocols.
+    ///
+    /// Control messages travel over a dedicated control channel, separate from
+    /// application data payloads. This provides a clean separation of concerns and
+    /// allows framework-level coordination to be independent of application logic.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub enum PorkControlMessage {
-        /// Ask the remote process to terminate gracefully.
+        /// Host to child: request a graceful shutdown.
         GracefulShutdown,
+        /// Host to child: request a graceful exit before the host starts a replacement process.
+        Restart,
+        /// Child to host: report the current lifecycle state and timestamp.
+        StatusUpdate(PorkStatusUpdate),
     }
 
     /// Shared wrapper for Pork IPC traffic.
@@ -285,7 +355,7 @@ pub mod protocol {
                 Self::Json => {
                     #[cfg(feature = "codec-json")]
                     {
-                        crate::codecs::JsonCodec::encode(&message)
+                        crate::codecs::json::JsonCodec::encode(&message)
                     }
                     #[cfg(not(feature = "codec-json"))]
                     {
@@ -296,7 +366,7 @@ pub mod protocol {
                 Self::Postcard => {
                     #[cfg(feature = "codec-postcard")]
                     {
-                        crate::codecs::PostcardCodec::encode(&message)
+                        crate::codecs::postcard::PostcardCodec::encode(&message)
                     }
                     #[cfg(not(feature = "codec-postcard"))]
                     {
@@ -316,7 +386,7 @@ pub mod protocol {
                 Self::Json => {
                     #[cfg(feature = "codec-json")]
                     {
-                        match crate::codecs::JsonCodec::decode::<Vec<u8>>(bytes)? {
+                        match crate::codecs::json::JsonCodec::decode::<Vec<u8>>(bytes)? {
                             PorkIpcMessage::Control(control) => Ok(control),
                             PorkIpcMessage::Custom(_) => Err(PorkProtoCodecError::UnsupportedCodec),
                         }
@@ -330,7 +400,7 @@ pub mod protocol {
                 Self::Postcard => {
                     #[cfg(feature = "codec-postcard")]
                     {
-                        match crate::codecs::PostcardCodec::decode::<Vec<u8>>(bytes)? {
+                        match crate::codecs::postcard::PostcardCodec::decode::<Vec<u8>>(bytes)? {
                             PorkIpcMessage::Control(control) => Ok(control),
                             PorkIpcMessage::Custom(_) => Err(PorkProtoCodecError::UnsupportedCodec),
                         }
@@ -373,12 +443,31 @@ pub mod protocol {
             self.encode_control_message(PorkControlMessage::GracefulShutdown)
         }
 
+        /// Returns `true` when the given message requests a restart.
+        pub fn is_restart(self, message: &PorkControlMessage) -> bool {
+            let _ = self;
+            matches!(message, PorkControlMessage::Restart)
+        }
+
+        /// Serializes a restart control message using the selected codec.
+        pub fn encode_restart(self) -> Result<Vec<u8>, PorkProtoCodecError> {
+            self.encode_control_message(PorkControlMessage::Restart)
+        }
+
         /// Returns `true` when the given bytes decode to a graceful-shutdown
         /// control message.
         pub fn is_graceful_shutdown_message(self, bytes: &[u8]) -> bool {
             matches!(
                 self.decode_control_message(bytes),
                 Ok(message) if self.is_graceful_shutdown(&message)
+            )
+        }
+
+        /// Returns `true` when the given bytes decode to a restart control message.
+        pub fn is_restart_message(self, bytes: &[u8]) -> bool {
+            matches!(
+                self.decode_control_message(bytes),
+                Ok(message) if self.is_restart(&message)
             )
         }
     }
@@ -432,11 +521,6 @@ pub mod protocol {
             Ok(value) => value.parse(),
             Err(_) => Ok(PorkControlCodec::default()),
         }
-    }
-
-    /// Reads a child bootstrap value from the given environment variable name.
-    pub fn child_bootstrap_env_value(env_name: &str) -> Result<String, std::env::VarError> {
-        std::env::var(env_name)
     }
 
     /// Shared codec trait for feature-gated built-in encoders.

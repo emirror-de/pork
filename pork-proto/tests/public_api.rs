@@ -1,5 +1,6 @@
 use pork_proto::protocol::{
-    PorkControlCodec, PorkControlMessage, PorkIpcMessage, PorkProtoCodecError,
+    PorkChildStatus, PorkControlCodec, PorkControlMessage, PorkIpcMessage, PorkProtoCodecError,
+    PorkStatusUpdate,
 };
 
 #[test]
@@ -55,9 +56,11 @@ fn pork_control_codec_parse_rejects_unknown_values_with_original_input() {
 }
 
 #[test]
-fn graceful_shutdown_helper_matches_control_message() {
+fn lifecycle_helpers_match_control_messages() {
     assert!(PorkControlCodec::Json.is_graceful_shutdown(&PorkControlMessage::GracefulShutdown));
     assert!(PorkControlCodec::Postcard.is_graceful_shutdown(&PorkControlMessage::GracefulShutdown));
+    assert!(PorkControlCodec::Json.is_restart(&PorkControlMessage::Restart));
+    assert!(PorkControlCodec::Postcard.is_restart(&PorkControlMessage::Restart));
 }
 
 #[test]
@@ -191,8 +194,52 @@ fn postcard_codec_round_trips_graceful_shutdown_control_messages() {
 
 #[cfg(feature = "codec-json")]
 #[test]
+fn json_codec_round_trips_restart_and_status_control_messages() {
+    assert_control_round_trip(PorkControlCodec::Json, PorkControlMessage::Restart);
+    assert_control_round_trip(
+        PorkControlCodec::Json,
+        PorkControlMessage::StatusUpdate(PorkStatusUpdate {
+            status: PorkChildStatus::Running,
+            timestamp_ms: 42,
+        }),
+    );
+
+    let encoded = PorkControlCodec::Json.encode_restart();
+    assert!(matches!(encoded, Ok(bytes) if PorkControlCodec::Json.is_restart_message(&bytes)));
+}
+
+#[cfg(feature = "codec-postcard")]
+#[test]
+fn postcard_codec_round_trips_restart_and_status_control_messages() {
+    assert_control_round_trip(PorkControlCodec::Postcard, PorkControlMessage::Restart);
+    assert_control_round_trip(
+        PorkControlCodec::Postcard,
+        PorkControlMessage::StatusUpdate(PorkStatusUpdate {
+            status: PorkChildStatus::Running,
+            timestamp_ms: 42,
+        }),
+    );
+
+    let encoded = PorkControlCodec::Postcard.encode_restart();
+    assert!(matches!(encoded, Ok(bytes) if PorkControlCodec::Postcard.is_restart_message(&bytes)));
+}
+
+#[cfg(any(feature = "codec-json", feature = "codec-postcard"))]
+fn assert_control_round_trip(codec: PorkControlCodec, message: PorkControlMessage) {
+    let encoded = codec.encode_control_message(message.clone());
+    let bytes = match encoded {
+        Ok(bytes) => bytes,
+        Err(error) => panic!("control-message encoding should succeed: {error}"),
+    };
+    let decoded = codec.decode_control_message(&bytes);
+
+    assert_eq!(decoded.ok(), Some(message));
+}
+
+#[cfg(feature = "codec-json")]
+#[test]
 fn json_codec_rejects_custom_payloads_as_control_messages() {
-    use pork_proto::codecs::JsonCodec;
+    use pork_proto::codecs::json::JsonCodec;
     use pork_proto::protocol::PorkCodec;
 
     let encoded = JsonCodec::encode(&PorkIpcMessage::custom(String::from("ping")));
@@ -221,7 +268,7 @@ fn json_codec_rejects_custom_payloads_as_control_messages() {
 #[cfg(feature = "codec-postcard")]
 #[test]
 fn postcard_codec_rejects_custom_payloads_as_control_messages() {
-    use pork_proto::codecs::PostcardCodec;
+    use pork_proto::codecs::postcard::PostcardCodec;
     use pork_proto::protocol::PorkCodec;
 
     let encoded = PostcardCodec::encode(&PorkIpcMessage::custom(String::from("ping")));

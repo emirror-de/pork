@@ -1,40 +1,113 @@
+//! Child process specifications and their dedicated builder API.
+
+mod builder;
+
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pork_proto::protocol::PorkControlCodec;
 
-use crate::DEFAULT_BOOTSTRAP_ENV;
+use crate::types::{
+    BootstrapEnvName, HeartbeatInterval, LogFilePath, ManagedChildName, ProcessExecutable,
+};
+use crate::{CONTROL_BOOTSTRAP_ENV, DEFAULT_BOOTSTRAP_ENV};
+
+pub use builder::ProcessSpecBuilder;
+
+/// Default heartbeat interval when status reporting is enabled.
+const DEFAULT_HEARTBEAT_INTERVAL: HeartbeatInterval =
+    HeartbeatInterval::new(std::time::Duration::from_secs(5));
 
 /// Configuration used to start and manage a child process.
 ///
-/// `ProcessSpec` is a builder-style type used by [`crate::orchestrator::ProcessOrchestrator`]
-/// to describe how a child process should be spawned, named, and connected back
-/// to the host process.
+/// `ProcessSpec` is the immutable configuration consumed by
+/// [`crate::orchestrator::ProcessOrchestrator`] when spawning a managed child.
+/// Build it with [`ProcessSpec::builder`] or [`ProcessSpecBuilder::new`].
 #[derive(Debug, Clone)]
 pub struct ProcessSpec {
-    pub(crate) executable: PathBuf,
-    pub(crate) managed_name: Option<String>,
+    pub(crate) executable: ProcessExecutable,
+    pub(crate) managed_name: Option<ManagedChildName>,
     pub(crate) control_codec: PorkControlCodec,
     pub(crate) args: Vec<String>,
     pub(crate) current_dir: Option<PathBuf>,
     pub(crate) env: HashMap<String, String>,
-    pub(crate) bootstrap_env: String,
-    pub(crate) capture_stdout: bool,
-    pub(crate) capture_stderr: bool,
-    /// Managed names of processes that must be [`PorkChildStatus::Running`] before
-    /// this process is spawned. Dependencies are specified using [`Self::depends_on`]
-    /// or [`Self::depends_on_all`]. All names must be registered with the same
-    /// [`crate::orchestrator::ProcessOrchestrator`].
-    pub(crate) depends_on: Vec<String>,
+    pub(crate) data_bootstrap_env: BootstrapEnvName,
+    pub(crate) control_bootstrap_env: BootstrapEnvName,
+    pub(crate) output: ProcessOutput,
+    /// Managed names of processes that must be `Running` before this process is spawned.
+    pub(crate) depends_on: Vec<ManagedChildName>,
+    /// Optional heartbeat interval for automatic status reporting.
+    pub(crate) heartbeat_interval: Option<HeartbeatInterval>,
+}
+
+/// Output configuration for a managed child process.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ProcessOutput {
+    /// Inherit stdout and stderr from the parent process.
+    #[default]
+    Inherit,
+    /// Pipe selected streams back to the parent process.
+    Capture {
+        /// Whether stdout is captured.
+        stdout: bool,
+        /// Whether stderr is captured.
+        stderr: bool,
+    },
+    /// Append stdout and stderr to selected log files.
+    Log {
+        /// Log file for stdout, if configured.
+        stdout: Option<LogFilePath>,
+        /// Log file for stderr, if configured.
+        stderr: Option<LogFilePath>,
+    },
+}
+
+/// Managed dependency names required before a child starts.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ManagedChildDependencies(Vec<ManagedChildName>);
+
+impl ManagedChildDependencies {
+    /// Creates an empty dependency list.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the dependencies as a slice.
+    pub fn as_slice(&self) -> &[ManagedChildName] {
+        &self.0
+    }
+
+    /// Adds one dependency name.
+    pub fn push(&mut self, name: impl Into<ManagedChildName>) {
+        self.0.push(name.into());
+    }
+
+    /// Extends the dependency list with more names.
+    pub fn extend<I, S>(&mut self, names: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<ManagedChildName>,
+    {
+        self.0.extend(names.into_iter().map(Into::into));
+    }
+
+    /// Returns `true` when no dependencies are configured.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl ProcessSpec {
-    /// Creates a new process specification for the given executable path.
+    /// Creates a builder for a new process specification.
     ///
-    /// By default, the process has no managed name, uses the default control
-    /// codec, inherits the default bootstrap environment variable name, and
-    /// does not capture stdout or stderr.
-    pub fn new(executable: impl Into<PathBuf>) -> Self {
+    /// The resulting builder starts with the same defaults that older inline builder usage had:
+    /// no managed name, the default control codec, inherited output, default bootstrap variable
+    /// names, and heartbeat reporting disabled.
+    pub fn builder(executable: impl Into<ProcessExecutable>) -> ProcessSpecBuilder {
+        ProcessSpecBuilder::new(executable)
+    }
+
+    pub(crate) fn new_with_defaults(executable: impl Into<ProcessExecutable>) -> Self {
         Self {
             executable: executable.into(),
             managed_name: None,
@@ -42,21 +115,22 @@ impl ProcessSpec {
             args: Vec::new(),
             current_dir: None,
             env: HashMap::new(),
-            bootstrap_env: DEFAULT_BOOTSTRAP_ENV.to_owned(),
-            capture_stdout: false,
-            capture_stderr: false,
+            data_bootstrap_env: DEFAULT_BOOTSTRAP_ENV.into(),
+            control_bootstrap_env: CONTROL_BOOTSTRAP_ENV.into(),
+            output: ProcessOutput::Inherit,
             depends_on: Vec::new(),
+            heartbeat_interval: None,
         }
     }
 
     /// Returns the executable path used to spawn the child process.
-    pub fn executable(&self) -> &PathBuf {
+    pub fn executable(&self) -> &ProcessExecutable {
         &self.executable
     }
 
     /// Returns the configured managed name, if one was assigned.
-    pub fn managed_name_ref(&self) -> Option<&str> {
-        self.managed_name.as_deref()
+    pub fn managed_name(&self) -> Option<&ManagedChildName> {
+        self.managed_name.as_ref()
     }
 
     /// Returns the configured control-message codec.
@@ -79,147 +153,64 @@ impl ProcessSpec {
         &self.env
     }
 
-    /// Returns the environment variable name used for the bootstrap handshake.
-    pub fn bootstrap_env_ref(&self) -> &str {
-        &self.bootstrap_env
+    /// Returns the environment variable name used for the data-channel bootstrap handshake.
+    pub fn data_bootstrap_env_ref(&self) -> &BootstrapEnvName {
+        &self.data_bootstrap_env
+    }
+
+    /// Returns the environment variable name used for the control-channel bootstrap handshake.
+    pub fn control_bootstrap_env_ref(&self) -> &BootstrapEnvName {
+        &self.control_bootstrap_env
     }
 
     /// Returns whether stdout capture is enabled.
     pub fn captures_stdout(&self) -> bool {
-        self.capture_stdout
+        match &self.output {
+            ProcessOutput::Capture { stdout, .. } => *stdout,
+            _ => false,
+        }
     }
 
     /// Returns whether stderr capture is enabled.
     pub fn captures_stderr(&self) -> bool {
-        self.capture_stderr
+        match &self.output {
+            ProcessOutput::Capture { stderr, .. } => *stderr,
+            _ => false,
+        }
     }
 
-    /// Assigns a stable managed name to the child process.
-    ///
-    /// Managed names allow you to look up and restart processes by name through
-    /// the orchestrator.
-    pub fn managed_name(mut self, value: impl Into<String>) -> Self {
-        self.managed_name = Some(value.into());
-        self
+    /// Returns the append-only logfile configured for stdout, if any.
+    pub fn stdout_log_ref(&self) -> Option<&Path> {
+        match &self.output {
+            ProcessOutput::Log { stdout, .. } => stdout.as_ref().map(LogFilePath::as_path),
+            _ => None,
+        }
     }
 
-    /// Removes any previously assigned managed name.
-    pub fn without_managed_name(mut self) -> Self {
-        self.managed_name = None;
-        self
+    /// Returns the append-only logfile configured for stderr, if any.
+    pub fn stderr_log_ref(&self) -> Option<&Path> {
+        match &self.output {
+            ProcessOutput::Log { stderr, .. } => stderr.as_ref().map(LogFilePath::as_path),
+            _ => None,
+        }
     }
 
-    /// Selects the control-message codec used between host and child.
-    pub fn control_codec(mut self, value: PorkControlCodec) -> Self {
-        self.control_codec = value;
-        self
-    }
-
-    /// Appends a single command-line argument.
-    pub fn arg(mut self, value: impl Into<String>) -> Self {
-        self.args.push(value.into());
-        self
-    }
-
-    /// Appends multiple command-line arguments in order.
-    pub fn args<I, S>(mut self, values: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.args.extend(values.into_iter().map(Into::into));
-        self
-    }
-
-    /// Sets the working directory for the child process.
-    pub fn current_dir(mut self, value: impl Into<PathBuf>) -> Self {
-        self.current_dir = Some(value.into());
-        self
-    }
-
-    /// Adds or overrides an environment variable for the child process.
-    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.insert(key.into(), value.into());
-        self
-    }
-
-    /// Extends the child environment with multiple key-value pairs.
-    pub fn envs<I, K, V>(mut self, values: I) -> Self
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<String>,
-    {
-        self.env.extend(
-            values
-                .into_iter()
-                .map(|(key, value)| (key.into(), value.into())),
-        );
-        self
-    }
-
-    /// Overrides the environment variable name used for bootstrap handshake data.
-    ///
-    /// The default value is [`DEFAULT_BOOTSTRAP_ENV`].
-    pub fn bootstrap_env(mut self, value: impl Into<String>) -> Self {
-        self.bootstrap_env = value.into();
-        self
-    }
-
-    /// Enables or disables stdout capture for the child process.
-    pub fn capture_stdout(mut self, value: bool) -> Self {
-        self.capture_stdout = value;
-        self
-    }
-
-    /// Enables or disables stderr capture for the child process.
-    pub fn capture_stderr(mut self, value: bool) -> Self {
-        self.capture_stderr = value;
-        self
-    }
-
-    /// Enables both stdout and stderr capture.
-    pub fn capture_output(mut self) -> Self {
-        self.capture_stdout = true;
-        self.capture_stderr = true;
-        self
-    }
-
-    /// Disables both stdout and stderr capture.
-    pub fn without_output_capture(mut self) -> Self {
-        self.capture_stdout = false;
-        self.capture_stderr = false;
-        self
+    /// Returns the configured heartbeat interval, if status reporting is enabled.
+    pub fn heartbeat_interval_ref(&self) -> Option<HeartbeatInterval> {
+        self.heartbeat_interval
     }
 
     /// Returns the managed names this process depends on.
-    ///
-    /// All named processes must be [`pork_proto::protocol::PorkChildStatus::Running`]
-    /// before this process is spawned.
-    pub fn depends_on_ref(&self) -> &[String] {
+    pub fn dependencies_ref(&self) -> &[ManagedChildName] {
         &self.depends_on
     }
 
-    /// Declares that this process depends on the named process.
-    ///
-    /// The orchestrator will wait for every declared dependency to reach
-    /// [`pork_proto::protocol::PorkChildStatus::Running`] before spawning this
-    /// process. Dependencies are identified by their managed name.
-    pub fn depends_on(mut self, name: impl Into<String>) -> Self {
-        self.depends_on.push(name.into());
-        self
+    /// Returns the managed dependency list for this process.
+    pub fn dependencies(&self) -> ManagedChildDependencies {
+        ManagedChildDependencies(self.depends_on.clone())
     }
+}
 
-    /// Declares that this process depends on all of the given named processes.
-    ///
-    /// Each name must correspond to a managed process registered with the same
-    /// [`crate::orchestrator::ProcessOrchestrator`].
-    pub fn depends_on_all<I, S>(mut self, names: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.depends_on.extend(names.into_iter().map(Into::into));
-        self
-    }
+pub(crate) fn default_heartbeat_interval() -> HeartbeatInterval {
+    DEFAULT_HEARTBEAT_INTERVAL
 }

@@ -1,232 +1,150 @@
 //! Process orchestration for building host/child IPC workflows on top of `ipc-channel`.
 //!
-//! `pork` is the high-level crate in the Pork workspace. It helps you:
+//! `pork` is a process orchestration library that helps you:
 //!
-//! - spawn and track child processes,
-//! - establish the bootstrap handshake between host and child,
-//! - exchange raw IPC payloads,
-//! - and gracefully shut children down with a shared control protocol.
+//! - Spawn and track child processes
+//! - Establish dual IPC channels (control and data) between host and child
+//! - Exchange typed data-plane payloads or structured IPC envelopes
+//! - Send encoded lifecycle control messages (`GracefulShutdown`, `Restart`) over a dedicated control channel
 //!
-//! The crate exposes explicit domain modules so the public API stays navigable:
+//! # Feature flags
 //!
-//! - [`orchestrator`] for process lifecycle management,
-//! - [`spec`] for child process configuration,
-//! - [`child`] for child-side bootstrap helpers,
-//! - [`error`] for orchestration error types.
+//! This crate uses complementary feature flags to separate host and child concerns:
 //!
-//! Pair this crate with the companion `pork-proto` crate when you want the
-//! shared control-plane types and codec implementations.
+//! - `host` (enabled by default): includes host-side orchestration
+//! - `client`: includes child-side bootstrap logic
+//! - `codec-json` (enabled by default): JSON codec support via `pork-proto`
+//! - `codec-postcard`: Postcard codec support via `pork-proto`
 //!
-//! # Typical architecture
+//! Both `host` and `client` features can be enabled in the same binary for testing,
+//! but typical deployments use `host` in parent binaries and `client` in child binaries.
 //!
-//! A Pork-based setup usually has two sides:
+//! # Architecture
 //!
-//! 1. A **host** process that creates an [`orchestrator::ProcessOrchestrator`] and starts one or more children.
-//! 2. A **child** process that reads bootstrap configuration from the environment and connects
-//!    back to the host with [`child::bootstrap::child_connect_from_env`].
+//! Pork uses a dual-channel bootstrap architecture:
 //!
-//! The host sends and receives raw `Vec<u8>` payloads. If you want a shared envelope for custom
-//! messages plus framework control messages, use `pork_proto::protocol::PorkIpcMessage`.
+//! 1. **Host-side setup**: Creates one-shot servers for data and control handshakes
+//! 2. **Child spawn**: Passes both server names through environment variables
+//! 3. **Data handshake**: Child connects and exchanges application channel endpoints
+//! 4. **Control handshake**: Child connects and exchanges framework channel endpoints
+//! 5. **Full bidirectional**: Both channels are ready for messaging
+//! 6. **Independent receive loops**: Child data and control reception run in separate workers
 //!
-//! # Quick start
+//! # Typical usage: Host side
 //!
-//! ```no_run
+//! ```rust
+//! # #[cfg(feature = "host")]
+//! # {
 //! use pork::orchestrator::ProcessOrchestrator;
 //! use pork::spec::ProcessSpec;
 //!
-//! fn main() -> Result<(), pork::error::OrchestratorError> {
-//!     let orchestrator = ProcessOrchestrator::new();
+//! // Configure host-side orchestration timeouts before spawning children.
+//! let orchestrator = ProcessOrchestrator::builder()
+//!     .graceful_shutdown_timeout(std::time::Duration::from_secs(2))
+//!     .dependency_timeout(std::time::Duration::from_secs(10))
+//!     .build();
 //!
-//!     let spec = ProcessSpec::new("./my-child-binary")
-//!         .managed_name("worker")
-//!         .arg("--serve");
+//! // Describe how the child should be started and identified.
+//! let spec = ProcessSpec::builder("./child-binary")
+//!     // Log files also use dedicated wrapper types internally.
+//!     .managed_name("example-child")
+//!     .log_output("./child.log")
+//!     .build();
 //!
-//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//!     runtime.block_on(async {
-//!         let child = orchestrator.start_process(spec).await?;
-//!         let _ = child;
-//!         Ok::<(), pork::error::OrchestratorError>(())
-//!     })?;
-//!     Ok(())
-//! }
+//! assert_eq!(orchestrator.graceful_shutdown_timeout(), std::time::Duration::from_secs(2));
+//! assert_eq!(orchestrator.dependency_timeout(), std::time::Duration::from_secs(10));
+//! assert_eq!(
+//!     spec.managed_name().map(pork::types::ManagedChildName::as_str),
+//!     Some("example-child")
+//! );
+//! # }
 //! ```
 //!
-//! # Host example
+//! # Typical usage: Child side
 //!
-//! This example starts a child, sends one raw message, and then requests a graceful shutdown.
+//! ```rust
+//! # #[cfg(feature = "client")]
+//! # fn main() -> Result<(), pork::error::OrchestratorError> {
+//! use pork::child::bootstrap::ChildBootstrap;
+//! use pork::{CONTROL_BOOTSTRAP_ENV, DEFAULT_BOOTSTRAP_ENV};
 //!
-//! ```no_run
-//! use pork::orchestrator::ProcessOrchestrator;
-//! use pork::spec::ProcessSpec;
-//!
-//! fn main() -> Result<(), pork::error::OrchestratorError> {
-//!     let orchestrator = ProcessOrchestrator::new();
-//!
-//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//!     runtime.block_on(async {
-//!         let child = orchestrator
-//!             .start_process(
-//!                 ProcessSpec::new("./child-binary")
-//!                     .managed_name("example-child")
-//!                     .capture_stdout(true)
-//!                     .capture_stderr(true),
-//!             )
-//!             .await?;
-//!
-//!         child.send(b"ping".to_vec())?;
-//!         let _exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
-//!         Ok::<(), pork::error::OrchestratorError>(())
-//!     })?;
-//!     Ok(())
+//! // Environment variables are set by host before spawning.
+//! unsafe {
+//!     std::env::set_var(DEFAULT_BOOTSTRAP_ENV, "data-bootstrap");
+//!     std::env::set_var(CONTROL_BOOTSTRAP_ENV, "control-bootstrap");
 //! }
+//!
+//! // Use the default env names when the host also uses `ProcessSpec` defaults.
+//! let bootstrap = ChildBootstrap::from_default_env()?;
+//! // Later, once connected, you can send typed data payloads like `"ready"` directly.
+//! // Or resolve the two env names explicitly when integrating with a custom launcher.
+//! let explicit = ChildBootstrap::from_env(DEFAULT_BOOTSTRAP_ENV, CONTROL_BOOTSTRAP_ENV)?;
+//! // `new` stores the env variable names for a later `connect()` call.
+//! let custom = ChildBootstrap::new(
+//!     DEFAULT_BOOTSTRAP_ENV.to_owned(),
+//!     CONTROL_BOOTSTRAP_ENV.to_owned(),
+//! );
+//!
+//! let _ = (bootstrap, explicit, custom);
+//!
+//! unsafe {
+//!     std::env::remove_var(DEFAULT_BOOTSTRAP_ENV);
+//!     std::env::remove_var(CONTROL_BOOTSTRAP_ENV);
+//! }
+//!
+//! Ok(())
+//! # }
+//! # #[cfg(not(feature = "client"))]
+//! # fn main() {}
 //! ```
 //!
-//! # Child example
+//! # Public API reference
 //!
-//! In the managed child process, connect back to the host by reading the bootstrap value from
-//! the configured environment variable.
+//! - **Host-side** (requires `host` feature):
+//!   - [`orchestrator::ProcessOrchestrator`]: main entry point for managing child processes
+//!   - [`orchestrator::managed_child::ManagedChild`]: handle to a running child process
+//!   - [`host::HostBootstrap`]: low-level host bootstrap coordination
 //!
-//! ```no_run
-//! use pork::child::bootstrap::child_connect_from_env;
-//! use pork::DEFAULT_BOOTSTRAP_ENV;
+//! - **Child-side** (requires `client` feature):
+//!   - [`child::bootstrap::ChildBootstrap`]: struct-based child bootstrap API
+//!   - [`child::bootstrap::ChildBootstrapChannels`]: data/control API with
+//!     independent receive workers and bounded queues
 //!
-//! fn main() -> Result<(), pork::error::OrchestratorError> {
-//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//!     runtime.block_on(async {
-//!         let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
-//!         let _ = (from_host, to_host);
-//!         Ok::<(), pork::error::OrchestratorError>(())
-//!     })?;
-//!     Ok(())
-//! }
-//! ```
+//! - **Shared**:
+//!   - [`spec::ProcessSpec`] and [`spec::ProcessSpecBuilder`]: child process configuration
+//!   - [`error::OrchestratorError`]: error types
 //!
-//! # Using a specific control codec
+//! If neither `host` nor `client` is enabled, only shared types are available.
+//! Typical usage enables at least one feature.
 //!
-//! The orchestrator automatically exports the selected control codec to the child process via
-//! `pork_proto::protocol::PORK_CONTROL_CODEC_ENV`. If you want to force a specific codec for
-//! control messages, set it on the [`spec::ProcessSpec`] before starting the process.
-//!
-//! ```no_run
-//! use pork::orchestrator::ProcessOrchestrator;
-//! use pork::spec::ProcessSpec;
-//! use pork_proto::protocol::PorkControlCodec;
-//!
-//! fn main() -> Result<(), pork::error::OrchestratorError> {
-//!     let orchestrator = ProcessOrchestrator::new();
-//!
-//!     let spec = ProcessSpec::new("./child-binary")
-//!         .managed_name("postcard-child")
-//!         .control_codec(PorkControlCodec::Postcard);
-//!
-//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//!     runtime.block_on(async {
-//!         let _child = orchestrator.start_process(spec).await?;
-//!         Ok::<(), pork::error::OrchestratorError>(())
-//!     })?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! # Receiving messages asynchronously
-//!
-//! [`orchestrator::ManagedChild::recv`] is async and integrates naturally into a Tokio application.
-//!
-//! ```no_run
-//! use pork::orchestrator::ProcessOrchestrator;
-//! use pork::spec::ProcessSpec;
-//!
-//! fn main() -> Result<(), pork::error::OrchestratorError> {
-//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//!     runtime.block_on(async {
-//!         let orchestrator = ProcessOrchestrator::new();
-//!         let child = orchestrator
-//!             .start_process(ProcessSpec::new("./child-binary"))
-//!             .await?;
-//!
-//!         if let Some(message) = child.recv().await {
-//!             let _ = message;
-//!         }
-//!
-//!         let _exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
-//!         Ok(())
-//!     })
-//! }
-//! ```
-//!
-//! # Process dependencies and startup ordering
-//!
-//! You can declare that a process should only start after other processes have
-//! reached the `Running` state using the [`spec::ProcessSpec::depends_on`] and
-//! [`spec::ProcessSpec::depends_on_all`] builder methods.
-//!
-//! The orchestrator will:
-//! - wait for all declared dependencies to reach `Running` status before spawning the process
-//! - detect and reject dependency cycles with [`error::OrchestratorError::DependencyCycle`]
-//! - time out if dependencies don't reach `Running` within the configured timeout,
-//!   returning [`error::OrchestratorError::DependencyTimeout`]
-//!
-//! ```no_run
-//! use pork::orchestrator::ProcessOrchestrator;
-//! use pork::spec::ProcessSpec;
-//! use pork::error::OrchestratorError;
-//!
-//! fn main() -> Result<(), OrchestratorError> {
-//!     let orchestrator = ProcessOrchestrator::new();
-//!
-//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
-//!     runtime.block_on(async {
-//!         // Start a database process first
-//!         let _db = orchestrator
-//!             .start_process(
-//!                 ProcessSpec::new("./db-binary")
-//!                     .managed_name("database"),
-//!             )
-//!             .await?;
-//!
-//!         // Start a worker that waits for the database to be ready
-//!         let _worker = orchestrator
-//!             .start_process(
-//!                 ProcessSpec::new("./worker-binary")
-//!                     .managed_name("worker")
-//!                     .depends_on("database"),
-//!             )
-//!             .await?;
-//!
-//!         Ok::<(), OrchestratorError>(())
-//!     })?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! # API guide
-//!
-//! - [`orchestrator::ProcessOrchestrator`] manages child lifecycle and process lookup.
-//! - [`spec::ProcessSpec`] configures how a child process is started, including process
-//!   dependencies via [`spec::ProcessSpec::depends_on`] and [`spec::ProcessSpec::depends_on_all`].
-//! - [`orchestrator::ManagedChild`] provides a handle for messaging and child identity.
-//! - [`child::bootstrap::child_connect_from_env`] and [`child::bootstrap::child_connect`] are the async child-side bootstrap helpers.
-//! - [`error::OrchestratorError`] defines error types including dependency-related errors:
-//!   [`error::OrchestratorError::DependencyCycle`],
-//!   [`error::OrchestratorError::DependencyTimeout`], and
-//!   [`error::OrchestratorError::DependencyNotFound`].
-//! - The companion `pork-proto` crate contains the shared control-plane contract and
-//!   codec marker types.
 #![deny(missing_docs)]
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(unsafe_code)]
 
 /// Child-side bootstrap helpers and shared child process constants.
+#[cfg(feature = "client")]
 pub mod child;
 /// Error types and convenience aliases used by the orchestration API.
 pub mod error;
-mod ipc;
-/// Host-side process lifecycle management types.
+/// Host-side bootstrap coordination (pure sequential dual-channel strategy).
+#[cfg(feature = "host")]
+pub mod host;
+/// Host-side process lifecycle management.
+#[cfg(feature = "host")]
 pub mod orchestrator;
 /// Child process configuration types and builders.
 pub mod spec;
+/// Strongly typed domain values used across the public API.
+pub mod types;
 
-/// Default environment variable name used to pass the bootstrap handshake value
+/// Environment variable name used to pass the data channel handshake server name
 /// from the host process to a managed child.
+///
+/// The child connects to this server and transfers the data-channel endpoints
+/// through the one-shot handshake.
 pub const DEFAULT_BOOTSTRAP_ENV: &str = "PORK_IPC_BOOTSTRAP";
+
+/// Environment variable name used to pass the control channel handshake server name
+/// from the host process to a managed child.
+pub const CONTROL_BOOTSTRAP_ENV: &str = "PORK_CONTROL_BOOTSTRAP";

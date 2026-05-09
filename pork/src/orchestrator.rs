@@ -2,26 +2,24 @@
 pub mod managed_child;
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use pork_proto::protocol::PorkChildStatus;
+use futures_util::StreamExt;
+use pork_proto::protocol::{PorkChildStatus, PorkControlMessage, PorkStatusUpdate};
 
-#[cfg(unix)]
-use nix::sys::signal::{Signal, kill};
-#[cfg(unix)]
-use nix::unistd::Pid;
-
-use ipc_channel::ipc::{IpcOneShotServer, IpcSender};
-
-use crate::error::{OrchestratorError, ProcessId, Result};
-use crate::ipc::HandshakeChannels;
+use self::managed_child::ManagedChild;
+use crate::error::{OrchestratorError, Result};
+#[cfg(feature = "host")]
+use crate::host::HostBootstrap;
+#[cfg(feature = "host")]
+use crate::host::channels::{HostControlSender, HostDataSender};
 use crate::spec::ProcessSpec;
+use crate::types::{ControlPayload, DataPayload, ManagedChildName, ProcessId};
 use pork_proto::protocol::{PORK_CONTROL_CODEC_ENV, PorkControlCodec};
-
-pub use managed_child::ManagedChild;
 
 const DEFAULT_MESSAGE_BUFFER_SIZE: usize = 1024;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -48,17 +46,63 @@ struct OrchestratorInner {
     /// Maximum time to wait for declared dependencies to reach `Running`.
     dependency_timeout: Duration,
     processes: tokio::sync::RwLock<HashMap<ProcessId, ProcessEntry>>,
-    process_names: tokio::sync::RwLock<HashMap<String, ProcessId>>,
+    process_names: tokio::sync::RwLock<HashMap<ManagedChildName, ProcessId>>,
 }
 
 #[derive(Debug)]
 struct ProcessEntry {
-    child: tokio::process::Child,
-    sender: IpcSender<Vec<u8>>,
-    managed_name: Option<String>,
+    child: Arc<tokio::sync::Mutex<tokio::process::Child>>,
+    data_sender: HostDataSender,
+    control_sender: HostControlSender,
+    managed_name: Option<ManagedChildName>,
     control_codec: PorkControlCodec,
     spec: ProcessSpec,
     status: PorkChildStatus,
+    /// Latest child-reported status update, including the child's timestamp.
+    child_reported_status: Arc<tokio::sync::Mutex<Option<PorkStatusUpdate>>>,
+    /// Handle to the background control channel receiver task.
+    control_task_handle: tokio::task::JoinHandle<()>,
+}
+
+async fn shutdown_control_task(control_task_handle: tokio::task::JoinHandle<()>) {
+    control_task_handle.abort();
+    let _ = control_task_handle.await;
+}
+
+async fn configure_process_output(
+    spec: &ProcessSpec,
+    command: &mut tokio::process::Command,
+) -> Result<()> {
+    match &spec.output {
+        crate::spec::ProcessOutput::Inherit => {}
+        crate::spec::ProcessOutput::Capture { stdout, stderr } => {
+            if *stdout {
+                command.stdout(Stdio::piped());
+            }
+            if *stderr {
+                command.stderr(Stdio::piped());
+            }
+        }
+        crate::spec::ProcessOutput::Log { stdout, stderr } => {
+            if let Some(path) = stdout {
+                command.stdout(Stdio::from(open_append_log(path.as_path()).await?));
+            }
+            if let Some(path) = stderr {
+                command.stderr(Stdio::from(open_append_log(path.as_path()).await?));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn open_append_log(path: &Path) -> Result<std::fs::File> {
+    let file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
+    Ok(file.into_std().await)
 }
 
 impl Default for ProcessOrchestrator {
@@ -99,25 +143,20 @@ impl ProcessOrchestrator {
 
     /// Restarts an existing managed process by numeric id.
     ///
-    /// This first performs a graceful shutdown using the orchestrator's default
-    /// timeout and then starts a new process using the original [`ProcessSpec`].
+    /// This sends an encoded [`PorkControlMessage::Restart`] request over the
+    /// dedicated control channel, waits up to the orchestrator's default timeout
+    /// for exit, force-kills on timeout, and then starts a replacement process
+    /// from the original [`ProcessSpec`].
     pub async fn restart_process(&self, process_id: ProcessId) -> Result<ManagedChild> {
-        let spec = {
-            let processes = self.inner.processes.read().await;
-            let entry = processes
-                .get(&process_id)
-                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
-            entry.spec.clone()
-        };
-
-        let _ = self.graceful_shutdown_process(process_id).await?;
-        self.start_process_inner(spec, false).await
+        self.restart_process_with_timeout(process_id, self.graceful_shutdown_timeout())
+            .await
     }
 
     /// Restarts an existing managed process by numeric id using an explicit timeout.
     ///
-    /// This first performs a graceful shutdown with `timeout` and then starts a
-    /// new process using the original [`ProcessSpec`].
+    /// This sends an encoded [`PorkControlMessage::Restart`] request, waits up to
+    /// `timeout` for exit, force-kills on timeout, and then starts a new process
+    /// using the original [`ProcessSpec`].
     pub async fn restart_process_with_timeout(
         &self,
         process_id: ProcessId,
@@ -131,12 +170,17 @@ impl ProcessOrchestrator {
             entry.spec.clone()
         };
 
-        let _ = self
-            .graceful_shutdown_process_with_timeout(process_id, timeout)
-            .await?;
+        self.request_lifecycle_control(
+            process_id,
+            PorkChildStatus::Restarting,
+            PorkControlMessage::Restart,
+        )
+        .await?;
+        let _ = self.wait_for_exit_or_stop(process_id, timeout).await?;
         self.start_process_inner(spec, false).await
     }
 
+    #[cfg(feature = "host")]
     async fn start_process_inner(
         &self,
         spec: ProcessSpec,
@@ -144,7 +188,8 @@ impl ProcessOrchestrator {
     ) -> Result<ManagedChild> {
         let managed_name = spec.managed_name.clone();
         let control_codec = spec.control_codec;
-        let process_id = self.inner.next_process_id.fetch_add(1, Ordering::Relaxed);
+        let process_id =
+            ProcessId::from(self.inner.next_process_id.fetch_add(1, Ordering::Relaxed));
 
         if reserve_name && let Some(process_name) = &managed_name {
             let mut process_names = self.inner.process_names.write().await;
@@ -178,9 +223,9 @@ impl ProcessOrchestrator {
         }
 
         let start_result = async {
-            let (bootstrap_server, bootstrap_name) = IpcOneShotServer::<HandshakeChannels>::new()?;
+            let (bootstrap_env, servers) = HostBootstrap::create_servers().await?;
 
-            let mut command = tokio::process::Command::new(&spec.executable);
+            let mut command = tokio::process::Command::new(spec.executable.as_path());
             command.args(&spec.args);
 
             if let Some(current_dir) = &spec.current_dir {
@@ -191,40 +236,58 @@ impl ProcessOrchestrator {
                 command.env(key, value);
             }
 
-            command.env(&spec.bootstrap_env, bootstrap_name);
+            bootstrap_env.apply_to_command(
+                &mut command,
+                spec.data_bootstrap_env.as_str(),
+                spec.control_bootstrap_env.as_str(),
+            );
             command.env(PORK_CONTROL_CODEC_ENV, control_codec.as_env_value());
+            configure_process_output(&spec, &mut command).await?;
 
-            if spec.capture_stdout {
-                command.stdout(Stdio::piped());
-            }
+            let child = Arc::new(tokio::sync::Mutex::new(command.spawn()?));
+            let channels = HostBootstrap::accept_connections(servers).await?;
 
-            if spec.capture_stderr {
-                command.stderr(Stdio::piped());
-            }
-
-            let child = command.spawn()?;
-            let (_, handshake) = tokio::task::spawn_blocking(move || bootstrap_server.accept())
-                .await
-                .map_err(|error| OrchestratorError::Io(std::io::Error::other(error)))??;
-
-            let sender = handshake.to_child;
-            let receiver = handshake.from_child;
-            let receiver = Box::pin(receiver.to_stream());
+            let data_sender = channels.data_sender;
+            let data_receiver = channels.data_receiver;
+            let control_sender = channels.control_sender;
+            let control_receiver = channels.control_receiver;
+            let receiver = Box::pin(data_receiver.into_stream());
 
             let managed_child = ManagedChild::new(
                 process_id,
                 managed_name.clone(),
-                sender.clone(),
+                data_sender.clone_inner(),
                 Arc::new(tokio::sync::Mutex::new(receiver)),
             );
 
+            // Spawn background task to receive child-reported status updates from the control channel.
+            let child_reported_status = Arc::new(tokio::sync::Mutex::new(None));
+            let child_reported_status_clone = child_reported_status.clone();
+            let control_task_handle = tokio::spawn(async move {
+                let mut control_stream = control_receiver.into_inner().to_stream();
+                while let Some(Ok(payload)) = control_stream.next().await {
+                    let payload = ControlPayload::from(payload);
+                    let Ok(message) = control_codec.decode_control_message(payload.as_ref()) else {
+                        continue;
+                    };
+                    if let pork_proto::protocol::PorkControlMessage::StatusUpdate(update) = message
+                    {
+                        let mut status = child_reported_status_clone.lock().await;
+                        *status = Some(update);
+                    }
+                }
+            });
+
             let entry = ProcessEntry {
                 child,
-                sender,
+                data_sender,
+                control_sender,
                 managed_name: managed_name.clone(),
                 control_codec,
                 spec,
                 status: PorkChildStatus::Running,
+                child_reported_status,
+                control_task_handle,
             };
 
             let mut processes = self.inner.processes.write().await;
@@ -251,8 +314,20 @@ impl ProcessOrchestrator {
         start_result
     }
 
+    #[cfg(not(feature = "host"))]
+    async fn start_process_inner(
+        &self,
+        _spec: ProcessSpec,
+        _reserve_name: bool,
+    ) -> Result<ManagedChild> {
+        Err(OrchestratorError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "host feature not enabled",
+        )))
+    }
+
     /// Returns an error if any name in `deps` is not currently registered.
-    async fn check_dependencies_known(&self, deps: &[String]) -> Result<()> {
+    async fn check_dependencies_known(&self, deps: &[ManagedChildName]) -> Result<()> {
         let process_names = self.inner.process_names.read().await;
         for name in deps {
             if !process_names.contains_key(name) {
@@ -264,19 +339,23 @@ impl ProcessOrchestrator {
 
     /// DFS cycle check: starting from `root`, walk the `depends_on` lists of
     /// every reachable process and report an error if `root` is encountered.
-    async fn check_dependency_cycle(&self, root: &str, deps: &[String]) -> Result<()> {
+    async fn check_dependency_cycle(
+        &self,
+        root: &ManagedChildName,
+        deps: &[ManagedChildName],
+    ) -> Result<()> {
         let processes = self.inner.processes.read().await;
 
-        let mut stack: Vec<&str> = deps.iter().map(String::as_str).collect();
-        let mut visited: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&ManagedChildName> = deps.iter().collect();
+        let mut visited: HashSet<&ManagedChildName> = HashSet::new();
 
         while let Some(current) = stack.pop() {
             if current == root {
                 // Collect the full cycle set for a useful error message.
-                let cycle: Vec<String> = deps
+                let cycle: Vec<ManagedChildName> = deps
                     .iter()
                     .cloned()
-                    .chain(std::iter::once(root.to_owned()))
+                    .chain(std::iter::once(root.clone()))
                     .collect();
                 return Err(OrchestratorError::DependencyCycle(cycle));
             }
@@ -288,12 +367,12 @@ impl ProcessOrchestrator {
             // Walk into transitive dependencies stored in the retained spec.
             let transitive = processes
                 .values()
-                .find(|e| e.managed_name.as_deref() == Some(current))
+                .find(|e| e.managed_name.as_ref() == Some(current))
                 .map(|e| e.spec.depends_on.as_slice())
                 .unwrap_or(&[]);
 
             for dep in transitive {
-                stack.push(dep.as_str());
+                stack.push(dep);
             }
         }
 
@@ -302,11 +381,15 @@ impl ProcessOrchestrator {
 
     /// Polls every name in `deps` until all report [`PorkChildStatus::Running`]
     /// or `timeout` elapses.
-    async fn wait_for_dependencies(&self, deps: &[String], timeout: Duration) -> Result<()> {
+    async fn wait_for_dependencies(
+        &self,
+        deps: &[ManagedChildName],
+        timeout: Duration,
+    ) -> Result<()> {
         let deadline = tokio::time::Instant::now() + timeout;
 
         loop {
-            let mut not_ready: Vec<String> = Vec::new();
+            let mut not_ready: Vec<ManagedChildName> = Vec::new();
 
             {
                 let processes = self.inner.processes.read().await;
@@ -338,13 +421,13 @@ impl ProcessOrchestrator {
     }
 
     /// Sends a raw IPC payload to the managed process identified by `process_id`.
-    pub async fn send(&self, process_id: ProcessId, message: Vec<u8>) -> Result<()> {
+    pub async fn send(&self, process_id: ProcessId, message: impl Into<DataPayload>) -> Result<()> {
         let sender = {
             let processes = self.inner.processes.read().await;
             let entry = processes
                 .get(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
-            entry.sender.clone()
+            entry.data_sender.clone()
         };
 
         sender.send(message)?;
@@ -360,14 +443,53 @@ impl ProcessOrchestrator {
         Ok(entry.status)
     }
 
-    /// Returns the current lifecycle status of the managed process identified by `name`.
-    pub async fn process_status_by_name(&self, name: &str) -> Result<PorkChildStatus> {
+    /// Returns the latest child-reported status for the managed child.
+    ///
+    /// The result is `None` until the child sends its first status update. The
+    /// returned timestamp is the time recorded by the child when it generated
+    /// the update.
+    pub async fn child_status(&self, process_id: ProcessId) -> Result<Option<PorkStatusUpdate>> {
+        let child_reported_status = {
+            let processes = self.inner.processes.read().await;
+            processes
+                .get(&process_id)
+                .ok_or(OrchestratorError::ProcessNotFound(process_id))?
+                .child_reported_status
+                .clone()
+        };
+
+        let status = child_reported_status.lock().await;
+        Ok(*status)
+    }
+
+    /// Returns the latest child-reported status for the managed process identified by `name`.
+    ///
+    /// The result is `None` until the child sends its first status update. The
+    /// returned timestamp is the time recorded by the child when it generated
+    /// the update.
+    pub async fn child_status_by_name(
+        &self,
+        name: &ManagedChildName,
+    ) -> Result<Option<PorkStatusUpdate>> {
         let process_id = {
             let process_names = self.inner.process_names.read().await;
             process_names
                 .get(name)
                 .copied()
-                .ok_or_else(|| OrchestratorError::ProcessNameNotFound(name.to_owned()))?
+                .ok_or_else(|| OrchestratorError::ProcessNameNotFound(name.clone()))?
+        };
+
+        self.child_status(process_id).await
+    }
+
+    /// Returns the current lifecycle status of the managed process identified by `name`.
+    pub async fn process_status_by_name(&self, name: &ManagedChildName) -> Result<PorkChildStatus> {
+        let process_id = {
+            let process_names = self.inner.process_names.read().await;
+            process_names
+                .get(name)
+                .copied()
+                .ok_or_else(|| OrchestratorError::ProcessNameNotFound(name.clone()))?
         };
 
         self.process_status(process_id).await
@@ -375,14 +497,15 @@ impl ProcessOrchestrator {
 
     /// Requests a graceful shutdown for the managed process identified by `process_id`.
     ///
-    /// This sends the shared Pork control message over IPC and, on Unix, also
-    /// sends `SIGTERM` to the process.
+    /// The request is codec-encoded and sent only through the dedicated control
+    /// channel. This method does not wait for the child to exit or send an OS signal.
     pub async fn request_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
-        self.set_process_status(process_id, PorkChildStatus::Stopping)
-            .await?;
-        self.request_ipc_graceful_shutdown(process_id).await?;
-        self.request_unix_graceful_shutdown(process_id).await?;
-        Ok(())
+        self.request_lifecycle_control(
+            process_id,
+            PorkChildStatus::Stopping,
+            PorkControlMessage::GracefulShutdown,
+        )
+        .await
     }
 
     /// Gracefully shuts down a managed process using the orchestrator's default timeout.
@@ -393,93 +516,67 @@ impl ProcessOrchestrator {
 
     /// Gracefully shuts down a managed process using an explicit timeout.
     ///
-    /// If the child does not exit before the timeout expires, the process is
-    /// forcibly stopped.
+    /// Sends an encoded [`PorkControlMessage::GracefulShutdown`] over the control
+    /// channel. If the child does not exit before `timeout` expires, the process
+    /// is forcibly stopped.
     pub async fn graceful_shutdown_process_with_timeout(
         &self,
         process_id: ProcessId,
         timeout: Duration,
     ) -> Result<ExitStatus> {
-        self.request_graceful_shutdown(process_id).await?;
-
-        let sleep = tokio::time::sleep(timeout);
-        tokio::pin!(sleep);
-
-        tokio::select! {
-            result = self.wait_for_exit(process_id) => {
-                let status = result?;
-                self.finish_process_shutdown(process_id, status).await
-            }
-            _ = &mut sleep => self.stop_process(process_id).await,
+        if self.process_status(process_id).await? != PorkChildStatus::Stopping {
+            self.request_graceful_shutdown(process_id).await?;
         }
+        self.wait_for_exit_or_stop(process_id, timeout).await
     }
 
-    async fn request_ipc_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
+    async fn request_lifecycle_control(
+        &self,
+        process_id: ProcessId,
+        status: PorkChildStatus,
+        message: PorkControlMessage,
+    ) -> Result<()> {
+        self.set_process_status(process_id, status).await?;
         let (sender, codec) = {
             let processes = self.inner.processes.read().await;
             let entry = processes
                 .get(&process_id)
                 .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
-            (entry.sender.clone(), entry.control_codec)
+            (entry.control_sender.clone(), entry.control_codec)
         };
 
-        let payload = codec
-            .encode_graceful_shutdown()
-            .map_err(|error| OrchestratorError::Io(std::io::Error::other(error)))?;
-        sender.send(payload)?;
+        sender.send(ControlPayload::from(codec.encode_control_message(message)?))?;
         Ok(())
     }
 
-    #[cfg(unix)]
-    async fn request_unix_graceful_shutdown(&self, process_id: ProcessId) -> Result<()> {
-        let raw_pid = {
-            let processes = self.inner.processes.read().await;
-            let entry = processes
-                .get(&process_id)
-                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
-            entry
-                .child
-                .id()
-                .ok_or(OrchestratorError::ProcessNotFound(process_id))? as i32
-        };
-
-        kill(Pid::from_raw(raw_pid), Signal::SIGTERM)
-            .map_err(std::io::Error::from)
-            .map_err(OrchestratorError::Io)?;
-        Ok(())
+    async fn wait_for_exit_or_stop(
+        &self,
+        process_id: ProcessId,
+        timeout: Duration,
+    ) -> Result<ExitStatus> {
+        match tokio::time::timeout(timeout, self.wait_for_exit(process_id)).await {
+            Ok(result) => self.finish_process_shutdown(process_id, result?).await,
+            Err(_) => self.stop_process(process_id).await,
+        }
     }
 
-    #[cfg(not(unix))]
-    async fn request_unix_graceful_shutdown(&self, _process_id: ProcessId) -> Result<()> {
-        Ok(())
-    }
-
-    /// Immediately stops a managed process.
-    ///
-    /// This removes the process from the orchestrator, attempts to kill it, waits
-    /// for the child to exit, and then cleans up background forwarding state.
+    /// Immediately kills, reaps, and removes a managed process.
     pub async fn stop_process(&self, process_id: ProcessId) -> Result<ExitStatus> {
         self.set_process_status(process_id, PorkChildStatus::Stopping)
             .await?;
-
-        let mut entry = {
-            let mut processes = self.inner.processes.write().await;
-            let mut entry = processes
-                .remove(&process_id)
-                .ok_or(OrchestratorError::ProcessNotFound(process_id))?;
-            entry.status = PorkChildStatus::Stopped;
-            entry
+        let child = self.child_handle(process_id).await?;
+        let status = {
+            let mut child = child.lock().await;
+            match child.try_wait()? {
+                Some(status) => status,
+                None => {
+                    child.start_kill()?;
+                    child.wait().await?
+                }
+            }
         };
 
-        let _ = entry.child.kill().await;
-        let status = entry.child.wait().await?;
-
-        if let Some(process_name) = &entry.managed_name {
-            let mut process_names = self.inner.process_names.write().await;
-            process_names.remove(process_name);
-        }
-
-        Ok(status)
+        self.finish_process_shutdown(process_id, status).await
     }
 
     async fn finish_process_shutdown(
@@ -495,6 +592,7 @@ impl ProcessOrchestrator {
             entry.status = PorkChildStatus::Stopped;
             entry
         };
+        shutdown_control_task(entry.control_task_handle).await;
 
         if let Some(process_name) = &entry.managed_name {
             let mut process_names = self.inner.process_names.write().await;
@@ -505,19 +603,20 @@ impl ProcessOrchestrator {
     }
 
     async fn wait_for_exit(&self, process_id: ProcessId) -> Result<ExitStatus> {
-        let mut entry = {
-            let mut processes = self.inner.processes.write().await;
-            processes
-                .remove(&process_id)
-                .ok_or(OrchestratorError::ProcessNotFound(process_id))?
-        };
+        let child = self.child_handle(process_id).await?;
+        let mut child = child.lock().await;
+        Ok(child.wait().await?)
+    }
 
-        let status = entry.child.wait().await?;
-
-        let mut processes = self.inner.processes.write().await;
-        processes.insert(process_id, entry);
-
-        Ok(status)
+    async fn child_handle(
+        &self,
+        process_id: ProcessId,
+    ) -> Result<Arc<tokio::sync::Mutex<tokio::process::Child>>> {
+        let processes = self.inner.processes.read().await;
+        processes
+            .get(&process_id)
+            .map(|entry| entry.child.clone())
+            .ok_or(OrchestratorError::ProcessNotFound(process_id))
     }
 
     async fn set_process_status(
@@ -540,19 +639,19 @@ impl ProcessOrchestrator {
     }
 
     /// Looks up a managed process id by name.
-    pub async fn process_id_by_name(&self, name: &str) -> Result<Option<ProcessId>> {
+    pub async fn process_id_by_name(&self, name: &ManagedChildName) -> Result<Option<ProcessId>> {
         let process_names = self.inner.process_names.read().await;
         Ok(process_names.get(name).copied())
     }
 
     /// Returns `true` when a managed process with the given name exists.
-    pub async fn has_process_name(&self, name: &str) -> Result<bool> {
+    pub async fn has_process_name(&self, name: &ManagedChildName) -> Result<bool> {
         let process_names = self.inner.process_names.read().await;
         Ok(process_names.contains_key(name))
     }
 
     /// Returns the managed names currently registered with the orchestrator.
-    pub async fn process_names(&self) -> Result<Vec<String>> {
+    pub async fn process_names(&self) -> Result<Vec<ManagedChildName>> {
         let process_names = self.inner.process_names.read().await;
         Ok(process_names.keys().cloned().collect())
     }
@@ -600,7 +699,7 @@ impl ProcessOrchestratorBuilder {
     pub fn build(self) -> ProcessOrchestrator {
         ProcessOrchestrator {
             inner: Arc::new(OrchestratorInner {
-                next_process_id: AtomicU64::new(1),
+                next_process_id: AtomicU64::new(ProcessId::new(1).get()),
                 graceful_shutdown_timeout: self.graceful_shutdown_timeout,
                 dependency_timeout: self.dependency_timeout,
                 processes: tokio::sync::RwLock::new(HashMap::new()),

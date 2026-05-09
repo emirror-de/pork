@@ -1,12 +1,18 @@
 use std::path::PathBuf;
 
 use pork::error::{OrchestratorError, Result};
-use pork::orchestrator::{ManagedChild, ProcessOrchestrator};
+use pork::orchestrator::ProcessOrchestrator;
+use pork::orchestrator::managed_child::ManagedChild;
 use pork::spec::ProcessSpec;
+use pork::types::ManagedChildName;
 use pork_comms::{ChildMessage, HostMessage, decode_message, encode_message};
 use pork_proto::protocol::PorkControlCodec;
 
 const CHILD_MANAGED_NAME: &str = "example-child";
+
+fn child_managed_name() -> ManagedChildName {
+    ManagedChildName::from(CHILD_MANAGED_NAME)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,24 +24,29 @@ async fn main() -> Result<()> {
     let control_codec = PorkControlCodec::Json;
     let child = orchestrator
         .start_process(
-            ProcessSpec::new(child_binary)
+            ProcessSpec::builder(child_binary)
                 .managed_name(CHILD_MANAGED_NAME)
                 .capture_output()
-                .control_codec(control_codec),
+                .control_codec(control_codec)
+                .build(),
         )
         .await?;
 
-    let (process_id, managed_name) = child.identity();
+    let identity = child.identity();
     println!(
         "host: started child with id={} name={}",
-        process_id,
-        managed_name.unwrap_or("<unnamed>")
+        identity.process_id(),
+        identity
+            .managed_name()
+            .map(ManagedChildName::as_str)
+            .unwrap_or("<unnamed>")
     );
 
+    let child_name = child_managed_name();
     let lookup_id = orchestrator
-        .process_id_by_name(CHILD_MANAGED_NAME)
+        .process_id_by_name(&child_name)
         .await?
-        .ok_or_else(|| OrchestratorError::ProcessNameNotFound(CHILD_MANAGED_NAME.to_owned()))?;
+        .ok_or_else(|| OrchestratorError::ProcessNameNotFound(child_name.clone()))?;
     println!("host: lookup by name resolved to process id={lookup_id}");
 
     let registered_names = orchestrator.process_names().await?;
@@ -47,6 +58,13 @@ async fn main() -> Result<()> {
     send_host_message(&child, control_codec, HostMessage::Status)?;
     let status = recv_child_message(&child, control_codec).await?;
     println!("child -> host: {status:?}");
+
+    if let Some(child_status) = orchestrator.child_status_by_name(&child_name).await? {
+        println!(
+            "host: latest child-reported status = {:?} at {} ms",
+            child_status.status, child_status.timestamp_ms
+        );
+    }
 
     for message in [
         "hello from host",
@@ -62,7 +80,9 @@ async fn main() -> Result<()> {
     }
 
     println!("host: requesting graceful shutdown");
-    let exit_status = orchestrator.graceful_shutdown_process(child.id()).await?;
+    let exit_status = orchestrator
+        .graceful_shutdown_process(child.process_id())
+        .await?;
     println!("host: child exited with status {exit_status}");
 
     Ok(())
@@ -76,7 +96,7 @@ async fn recv_child_message(child: &ManagedChild, codec: PorkControlCodec) -> Re
         ))
     })?;
 
-    decode_message::<ChildMessage>(codec, &response)
+    decode_message::<ChildMessage>(codec, response.as_ref())
         .map_err(|error| {
             OrchestratorError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
         })?

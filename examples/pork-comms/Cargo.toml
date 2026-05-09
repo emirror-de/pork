@@ -1,6 +1,6 @@
 [package]
 name = "pork-comms"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 authors = ["Lewin Probst <info@emirror.de>"]
 rust-version = "1.85"
@@ -9,8 +9,18 @@ repository = "https://github.com/emirror-de/pork"
 description = "Example host/child communication binaries built on pork and pork-proto"
 publish = false
 
+[[bin]]
+name = "host"
+path = "src/bin/host.rs"
+doc = false
+
+[[bin]]
+name = "child"
+path = "src/bin/child.rs"
+doc = false
+
 [dependencies]
-pork = { path = "../../pork", features = ["codec-json", "codec-postcard"] }
+pork = { path = "../../pork", features = ["client", "codec-json", "codec-postcard"] }
 pork-proto = { path = "../../pork-proto", features = ["codec-json", "codec-postcard"] }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

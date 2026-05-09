@@ -10,7 +10,8 @@
 //! wrapped in [`pork_proto::protocol::PorkIpcMessage`] and encoded with the
 //! control codec chosen by the host process.
 
-use pork_proto::codecs::{JsonCodec, PostcardCodec};
+use pork_proto::codecs::json::JsonCodec;
+use pork_proto::codecs::postcard::PostcardCodec;
 use pork_proto::protocol::{PorkCodec, PorkControlCodec, PorkIpcMessage, PorkProtoCodecError};
 use serde::{Deserialize, Serialize};
 

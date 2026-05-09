@@ -50,6 +50,9 @@ jobs:
       - name: Unit tests (workspace)
         run: cargo test --workspace
 
+      - name: All features and targets (workspace)
+        run: cargo test --workspace --all-features --all-targets
+
   feature-matrix:
     name: Feature matrix
     needs: [fast-pr-check]
@@ -58,15 +61,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - pkg: pork
-            features: ""
-            desc: pork-default
-          - pkg: pork-proto
-            features: ""
-            desc: pork-proto-default
-          - pkg: pork-comms
-            features: ""
-            desc: examples-pork-comms
+          - desc: pork-default
+            cmd: cargo test -p pork
+          - desc: pork-host-only
+            cmd: cargo test -p pork --no-default-features --features host
+          - desc: pork-client-only
+            cmd: cargo test -p pork --no-default-features --features client
+          - desc: pork-host-client
+            cmd: cargo test -p pork --no-default-features --features host,client
+          - desc: pork-host-postcard
+            cmd: cargo test -p pork --no-default-features --features host,codec-postcard
+          - desc: pork-client-postcard
+            cmd: cargo test -p pork --no-default-features --features client,codec-postcard
+          - desc: pork-proto-default
+            cmd: cargo test -p pork-proto
+          - desc: pork-proto-json
+            cmd: cargo test -p pork-proto --no-default-features --features codec-json
+          - desc: pork-proto-postcard
+            cmd: cargo test -p pork-proto --no-default-features --features codec-postcard
+          - desc: examples-pork-comms
+            cmd: cargo test -p pork-comms
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,8 +100,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Test ${{ matrix.desc }}
-        run: |
-          cargo test -p ${{ matrix.pkg }}
+        run: ${{ matrix.cmd }}
 
   doc-tests:
     name: Documentation tests

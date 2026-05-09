@@ -1,26 +1,29 @@
 [package]
 name = "pork"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 authors = ["Lewin Probst <info@emirror.de>"]
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/emirror-de/pork"
 readme = "../README.md"
-description = "Host/child process orchestration with IPC bootstrap and graceful shutdown"
+description = "Process orchestration with dual IPC channels, typed payloads, and graceful child lifecycle control"
+homepage = "https://github.com/emirror-de/pork"
+documentation = "https://docs.rs/pork"
+keywords = ["ipc", "process", "orchestration", "supervisor", "tokio"]
+categories = ["asynchronous", "concurrency", "development-tools"]
 
 [features]
-default = []
-codec-json = []
-codec-postcard = []
+default = [ "codec-json", "host" ]
+codec-json = [ "pork-proto/codec-json" ]
+codec-postcard = [ "pork-proto/codec-postcard" ]
+host = []
+client = []
 
 [dependencies]
 futures-util = "0.3"
-interprocess.workspace = true
 ipc-channel.workspace = true
-nix.workspace = true
-pork-proto = { version = "1", path = "../pork-proto", features = ["codec-json", "codec-postcard"] }
-serde.workspace = true
+pork-proto = { version = "2", path = "../pork-proto" }
 tokio.workspace = true
 
 [lints.clippy]

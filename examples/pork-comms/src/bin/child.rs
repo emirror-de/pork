@@ -1,20 +1,27 @@
-use pork::DEFAULT_BOOTSTRAP_ENV;
-use pork::child::bootstrap::{child_connect_from_env, child_control_codec_from_env};
+use std::time::Duration;
+
+use pork::child::bootstrap::ChildBootstrap;
+use pork::child::status_reporter::StatusReporter;
 use pork_comms::{ChildMessage, HostMessage, decode_message, encode_message};
-use pork_proto::protocol::PorkControlCodec;
+use pork_proto::protocol::{PorkChildStatus, PorkControlCodec, PorkControlMessage};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let control_codec = child_control_codec_from_env()?;
-    let (from_host, to_host) = child_connect_from_env(DEFAULT_BOOTSTRAP_ENV).await?;
+    let channels = ChildBootstrap::from_default_env()?.connect().await?;
+    let control_codec = channels.control_codec();
     let mut handled_messages = 0_usize;
+    let mut status_reporter =
+        StatusReporter::new(channels.control_sender(), Duration::from_secs(5));
+
+    status_reporter.start().await?;
+    status_reporter.set_status(PorkChildStatus::Running).await;
 
     println!(
         "child: connected to host with control codec {}",
         control_codec.as_env_value()
     );
 
-    to_host.send(encode_message(
+    channels.send_data(encode_message(
         control_codec,
         ChildMessage::Ready {
             codec: control_codec_name(control_codec).to_owned(),
@@ -22,41 +29,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?)?;
 
     loop {
-        let payload = {
-            let from_host = from_host.lock().await;
-            from_host.recv()?
-        };
-
-        if control_codec.is_graceful_shutdown_message(&payload) {
-            println!("child: received graceful shutdown request");
-            break;
-        }
-
-        let Some(message) = decode_message::<HostMessage>(control_codec, &payload)? else {
-            continue;
-        };
-
-        handled_messages += 1;
-
-        match message {
-            HostMessage::Echo(text) => {
-                println!("child: received echo request '{text}'");
-                to_host.send(encode_message(control_codec, ChildMessage::Echoed(text))?)?;
+        tokio::select! {
+            control = channels.recv_control() => {
+                match control? {
+                    Some(PorkControlMessage::GracefulShutdown | PorkControlMessage::Restart) => {
+                        status_reporter.set_status(PorkChildStatus::Stopping).await;
+                        break;
+                    }
+                    Some(PorkControlMessage::StatusUpdate(_)) => {}
+                    None => break,
+                }
             }
-            HostMessage::Status => {
-                println!("child: received status request");
-                to_host.send(encode_message(
-                    control_codec,
-                    ChildMessage::Status {
-                        pid: std::process::id(),
-                        handled_messages,
-                        codec: control_codec_name(control_codec).to_owned(),
-                    },
-                )?)?;
+            payload = channels.recv_data() => {
+                let Some(payload) = payload else {
+                    println!("child: data channel closed");
+                    break;
+                };
+
+                let Some(message) = decode_message::<HostMessage>(control_codec, payload.as_ref())? else {
+                    continue;
+                };
+
+                handled_messages += 1;
+
+                match message {
+                    HostMessage::Echo(text) => {
+                        println!("child: received echo request '{text}'");
+                        channels.send_data(encode_message(control_codec, ChildMessage::Echoed(text))?)?;
+                    }
+                    HostMessage::Status => {
+                        println!("child: received status request");
+                        channels.send_data(encode_message(
+                            control_codec,
+                            ChildMessage::Status {
+                                pid: std::process::id(),
+                                handled_messages,
+                                codec: control_codec_name(control_codec).to_owned(),
+                            },
+                        )?)?;
+                    }
+                }
             }
         }
     }
 
+    status_reporter.stop().await;
     println!("child: exiting cleanly");
     Ok(())
 }

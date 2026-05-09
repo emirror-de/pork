@@ -5,8 +5,8 @@ resolver = "3"
 [workspace.dependencies]
 interprocess = { version = "2.4.0", features = ["async"] }
 ipc-channel = { version = "0.22.0", features = ["async"] }
-nix = { version = "0.31.3", features = ["signal"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
 tokio = { version = "1.50.0", features = ["full"] }
 
 [workspace.lints.clippy]
