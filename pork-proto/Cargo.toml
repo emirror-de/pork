@@ -6,6 +6,7 @@ authors = ["Lewin Probst <info@emirror.de>"]
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/emirror-de/pork"
+description = "Shared protocol primitives for pork: control messages, typed IPC envelopes, and codec implementations"
 
 [lints]
 workspace = true
