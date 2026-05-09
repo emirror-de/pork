@@ -56,7 +56,16 @@
             || (lib.hasSuffix ".toml" path)
             || (lib.hasSuffix ".lock" path)
             || (lib.hasSuffix ".md" path)
+            || (lib.hasSuffix ".nix" path)
             || (type == "directory");
+        };
+
+        toolchainEnv = {
+          inherit src;
+          nativeBuildInputs = [
+            rustToolchain
+            pkgs.pkg-config
+          ];
         };
 
         pork = pkgs.stdenv.mkDerivation {
@@ -64,15 +73,47 @@
           name = "pork";
           src = src;
           buildCommand = ''
-            # placeholder build - no-op
             mkdir -p $out
-            echo "pork placeholder" > $out/README
+            cp ${./README.md} $out/README.md
+            cp ${./pork/CHANGELOG.md} $out/CHANGELOG.md
+            cp ${./pork/LICENSE-MIT} $out/LICENSE-MIT
+            cp ${./pork/LICENSE-APACHE} $out/LICENSE-APACHE
           '';
         };
+
+        cargoFmtCheck = pkgs.runCommand "cargo-fmt-check" toolchainEnv ''
+          export HOME=$TMPDIR
+          cargo fmt --all --check
+          touch $out
+        '';
+
+        cargoClippyCheck = pkgs.runCommand "cargo-clippy-check" toolchainEnv ''
+          export HOME=$TMPDIR
+          cargo clippy --workspace --all-targets -- -D warnings
+          touch $out
+        '';
+
+        cargoTestCheck = pkgs.runCommand "cargo-test-check" toolchainEnv ''
+          export HOME=$TMPDIR
+          cargo test --workspace --all-targets
+          touch $out
+        '';
+
+        cargoTestAllFeaturesCheck = pkgs.runCommand "cargo-test-all-features-check" toolchainEnv ''
+          export HOME=$TMPDIR
+          cargo test --workspace --all-features --all-targets
+          touch $out
+        '';
       in
       {
         checks = {
-          inherit pork;
+          inherit
+            pork
+            cargoFmtCheck
+            cargoClippyCheck
+            cargoTestCheck
+            cargoTestAllFeaturesCheck
+            ;
         };
 
         packages = {
@@ -104,8 +145,7 @@
           ++ lib.optionals (pkgs.stdenv.isLinux) [
           ];
 
-          shellHook = ''
-          '';
+          shellHook = "";
         };
 
         # Formatter for the flake itself

@@ -1,6 +1,6 @@
 [package]
 name = "pork"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 authors = ["Lewin Probst <info@emirror.de>"]
 rust-version = "1.85"

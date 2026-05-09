@@ -82,10 +82,7 @@ async fn process_starts_when_dependency_is_already_running() {
     let _ = recv_utf8(&dep).await;
 
     let dependent = match orchestrator
-        .start_process(
-            dep_child_spec("dep-consumer-ready")
-                .depends_on("dep-provider-ready"),
-        )
+        .start_process(dep_child_spec("dep-consumer-ready").depends_on("dep-provider-ready"))
         .await
     {
         Ok(child) => child,
@@ -129,10 +126,7 @@ async fn start_process_returns_dependency_timeout_when_dep_not_ready_in_time() {
     // Register the dependency name so it passes the `DependencyNotFound`
     // check, but keep it in `Stopping` state by requesting a shutdown before
     // the dependent tries to start.
-    let dep = match orchestrator
-        .start_process(dep_child_spec("slow-dep"))
-        .await
-    {
+    let dep = match orchestrator.start_process(dep_child_spec("slow-dep")).await {
         Ok(child) => child,
         Err(error) => panic!("dependency should start: {error}"),
     };
@@ -144,10 +138,7 @@ async fn start_process_returns_dependency_timeout_when_dep_not_ready_in_time() {
     }
 
     let result = orchestrator
-        .start_process(
-            dep_child_spec("waits-for-slow-dep")
-                .depends_on("slow-dep"),
-        )
+        .start_process(dep_child_spec("waits-for-slow-dep").depends_on("slow-dep"))
         .await;
 
     // Clean up the dependency process regardless of test outcome.
@@ -169,10 +160,7 @@ async fn start_process_returns_dependency_cycle_for_self_dependency() {
         .build();
 
     // Start a real process first so its name is registered.
-    let dep = match orchestrator
-        .start_process(dep_child_spec("self-dep"))
-        .await
-    {
+    let dep = match orchestrator.start_process(dep_child_spec("self-dep")).await {
         Ok(child) => child,
         Err(error) => panic!("initial process should start: {error}"),
     };
@@ -188,10 +176,7 @@ async fn start_process_returns_dependency_cycle_for_self_dependency() {
         .build();
 
     // Seed the name registry by starting "cycle-a".
-    let a = match fresh
-        .start_process(dep_child_spec("cycle-a"))
-        .await
-    {
+    let a = match fresh.start_process(dep_child_spec("cycle-a")).await {
         Ok(child) => child,
         Err(error) => panic!("cycle-a should start: {error}"),
     };
@@ -228,10 +213,7 @@ async fn start_process_returns_dependency_cycle_for_self_dependency() {
     // on the fact that the name-reservation step runs first so the name is
     // visible to the cycle-check DFS.
     let result = fresh
-        .start_process(
-            dep_child_spec("cycle-self")
-                .depends_on("cycle-self"),
-        )
+        .start_process(dep_child_spec("cycle-self").depends_on("cycle-self"))
         .await;
 
     shutdown(&fresh, &a).await;
@@ -279,8 +261,7 @@ fn dep_test_child_entrypoint() {
         Ok(runtime) => runtime,
         Err(error) => panic!("tokio runtime should be created: {error}"),
     };
-    let (receiver, sender) = match runtime.block_on(child_connect_from_env(DEFAULT_BOOTSTRAP_ENV))
-    {
+    let (receiver, sender) = match runtime.block_on(child_connect_from_env(DEFAULT_BOOTSTRAP_ENV)) {
         Ok(channels) => channels,
         Err(error) => panic!("child IPC bootstrap should succeed: {error}"),
     };

@@ -1,5 +1,5 @@
-use pork::spec::ProcessSpec;
 use pork::DEFAULT_BOOTSTRAP_ENV;
+use pork::spec::ProcessSpec;
 use pork_proto::protocol::PorkControlCodec;
 
 #[test]

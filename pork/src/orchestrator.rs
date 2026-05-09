@@ -173,7 +173,8 @@ impl ProcessOrchestrator {
             }
 
             let timeout = self.inner.dependency_timeout;
-            self.wait_for_dependencies(&spec.depends_on, timeout).await?;
+            self.wait_for_dependencies(&spec.depends_on, timeout)
+                .await?;
         }
 
         let start_result = async {

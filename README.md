@@ -62,27 +62,36 @@ If you are browsing locally, the crate-level docs are the best starting point be
 
 You need:
 
-- Rust `1.85` or newer
-- a working Cargo toolchain
+- Rust toolchain (this workspace targets Rust `1.85`)
+- Cargo
 - Unix-like local IPC support for the current process model
-- optional: Nix with flakes enabled if you want the provided development shell
+- Optional: Nix with flakes enabled if you want the provided development shell
 
 ### Build the workspace
 
-From the repository root, run:
+Using Nix (recommended for reproducible developer shells):
 
-```/dev/null/install.sh#L1-2
+```sh
+nix develop -c cargo build --workspace
+nix develop -c cargo test --workspace --all-targets
+nix develop -c cargo test --workspace --all-features --all-targets
+```
+
+Without Nix (plain Cargo):
+
+```sh
 cargo build --workspace
 cargo test --workspace --all-targets
+cargo test --workspace --all-features --all-targets
 ```
 
 ### Optional Nix development shell
 
-If you use Nix for local development, enter the shell first and then run the same Cargo commands:
+If you prefer an interactive shell, enter it first and then run the same Cargo commands inside that shell:
 
-```/dev/null/install.sh#L1-2
+```sh
 nix develop
-cargo test --workspace --all-targets
+cargo test --workspace --all-features --all-targets
 ```
 
 ## Basic workflow
@@ -99,7 +108,7 @@ For a complete typed example, see `examples/pork-comms/`.
 
 Host side sketch:
 
-```/dev/null/host.rs#L1-16
+```rust
 use pork::orchestrator::ProcessOrchestrator;
 use pork::spec::ProcessSpec;
 
@@ -121,7 +130,7 @@ async fn run_host() -> Result<(), pork::error::OrchestratorError> {
 
 Child side sketch:
 
-```/dev/null/child.rs#L1-11
+```rust
 use pork::child::bootstrap::child_connect_from_env;
 use pork::DEFAULT_BOOTSTRAP_ENV;
 
@@ -134,11 +143,52 @@ async fn run_child() -> Result<(), pork::error::OrchestratorError> {
 
 ## Validate locally
 
-From the repository root, run:
+Run these checks before making a release or merging large changes. These match what CI enforces.
 
-- `cargo fmt --all --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace --all-targets`
+Formatting and lints
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Tests and docs
+
+```sh
+cargo test --workspace
+cargo test --workspace --doc
+cargo test --workspace --all-features --all-targets
+```
+
+Security & license checks
+
+```sh
+# install tools if you don't have them already
+cargo install --locked cargo-audit cargo-deny
+
+# run the checks
+cargo audit
+cargo deny check
+```
+
+MSRV (verify compilation on minimum supported Rust)
+
+```sh
+rustup toolchain install 1.85.0
+rustup run 1.85.0 cargo check --workspace
+```
+
+Nix-based validation
+
+```sh
+nix flake check
+```
+
+## Security and license checks
+
+This repository uses `cargo-audit` and `cargo-deny` to enforce advisories and license policies in CI. The cargo-deny configuration lives at `deny.toml` (root of the `pork/` workspace). CI runs `cargo audit` and `cargo deny check` as part of the `security` job; run the same commands locally before releasing.
+
+The `deny.toml` file also contains any temporary advisory suppressions that have been reviewed and accepted with a plan to remediate (for example, a transitive unmaintained crate that currently has no safe upgrade path). Treat suppressions as temporary and track follow-up work to remove them.
 
 ## Example project
 
@@ -151,6 +201,58 @@ The `examples/pork-comms/` crate demonstrates a small end-to-end setup with:
 
 Use that example when you want a concrete reference before integrating `pork` into your own application.
 
-## Status
+**Note:** example crates are `publish = false` in their Cargo.toml to avoid accidental publishing.
 
-This workspace is intentionally small and focused: the main orchestration API lives in the `pork` crate, while shared protocol details live in `pork-proto`. Users who want the full typed host/child workflow should add both crates as dependencies, keeping orchestration and protocol concerns explicit instead of relying on cross-crate re-exports.
+## Release status & publishing
+
+This workspace is prepared for the `1.0.0` release line: the main orchestration API lives in the `pork` crate, while shared protocol details live in `pork-proto`.
+
+Before publishing, ensure CI is green and perform these validation steps locally (see the `Validate locally` section above). Publishing tips:
+
+- Identify which workspace crates are intended for crates.io (libraries) and which are examples or tools (set those to `publish = false`).
+- Crates that depend on `path = "..."` dependencies must be published in topological order. Typical sequence:
+  1. Publish the low-level crate (e.g. `pork-proto`) first: `cargo publish -p pork-proto` (use `--dry-run` to validate).
+  2. Update dependent crates to use the published version instead of `path = ...` and bump their versions.
+  3. Publish the dependent crate (e.g. `pork`).
+
+Recommended pre-publish commands (examples)
+
+```sh
+# dry-run packaging and publish for pork-proto
+cargo package --manifest-path pork-proto/Cargo.toml
+cargo publish --dry-run -p pork-proto
+
+# publish pork-proto, then update dependent manifests and publish pork
+cargo publish -p pork-proto
+# update pork/Cargo.toml to depend on the published pork-proto version (remove path dep)
+cargo package --manifest-path pork/Cargo.toml
+cargo publish --dry-run -p pork
+cargo publish -p pork
+
+# tag and create a GitHub release
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+# (optional, using GitHub CLI)
+gh release create vX.Y.Z --notes-file CHANGELOG.md
+```
+
+## Where we enforce CI
+
+CI is defined in `.github/workflows/ci.yml` and runs the following gates on PRs and pushes to release branches:
+
+- formatting (`cargo fmt --check`)
+- clippy (`cargo clippy`)
+- unit tests (`cargo test`)
+- documentation tests (`cargo test --doc`)
+- MSRV compile check (Rust 1.85)
+- security and license checks (`cargo audit`, `cargo deny check`)
+- `nix flake check`
+
+## Where to look next
+
+- See `pork/src/lib.rs` and `pork-proto/src/lib.rs` for crate-level documentation and examples.
+- Look at `.github/workflows/ci.yml` for the exact CI jobs and expected checks.
+
+---
+
+If you want, I can also add a `RELEASE.md` that codifies the publishing sequence and the exact git commands to use during a release.  

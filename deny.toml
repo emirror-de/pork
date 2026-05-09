@@ -1,0 +1,37 @@
+[licenses]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "0BSD",
+  "Unicode-3.0",
+  "ISC",
+  "BSD-3-Clause",
+  "BSD-2-Clause",
+  "Unlicense",
+  "MPL-2.0",
+  "Zlib",
+  "CC0-1.0"
+]
+
+[advisories]
+
+# Suppress unmaintained or unavoidable transitive advisories where we've
+# reviewed the chain and decided to accept the risk temporarily. Each entry
+# should include a concise reason and a plan for follow-up.
+
+[[advisories.ignore]]
+# atomic-polyfill is flagged as unmaintained (RUSTSEC-2023-0089). It is
+# reachable transitively via postcard -> heapless -> atomic-polyfill in the
+# current dependency tree. There is no safe upstream upgrade available at the
+# moment. Suppress this advisory while tracking a follow-up to migrate to a
+# maintained alternative (for example: portable-atomic) or to update the
+# dependency that pulls it in.
+id = "RUSTSEC-2023-0089"
+reason = "atomic-polyfill is unmaintained but reachable only via postcard/heapless; no safe upgrade available; plan: consider replacing postcard/heapless or use portable-atomic as upstream permits."
+
+# Add further advisory suppressions here if you have reviewed and accepted
+# them. Example format:
+#
+# [[advisories.ignore]]
+# id = "RUSTSEC-2025-0141"
+# reason = "bincode is unmaintained but reachable only via surrealdb; awaiting upstream fix."
