@@ -18,7 +18,7 @@ futures-util = "0.3"
 interprocess.workspace = true
 ipc-channel.workspace = true
 nix.workspace = true
-pork-proto = { path = "../pork-proto", features = ["codec-json", "codec-postcard"] }
+pork-proto = { version = "1", path = "../pork-proto", features = ["codec-json", "codec-postcard"] }
 serde.workspace = true
 tokio.workspace = true
 
