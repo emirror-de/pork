@@ -7,7 +7,7 @@ use crate::DEFAULT_BOOTSTRAP_ENV;
 
 /// Configuration used to start and manage a child process.
 ///
-/// `ProcessSpec` is a builder-style type used by [`crate::ProcessOrchestrator`]
+/// `ProcessSpec` is a builder-style type used by [`crate::orchestrator::ProcessOrchestrator`]
 /// to describe how a child process should be spawned, named, and connected back
 /// to the host process.
 #[derive(Debug, Clone)]
@@ -22,7 +22,8 @@ pub struct ProcessSpec {
     pub(crate) capture_stdout: bool,
     pub(crate) capture_stderr: bool,
     /// Managed names of processes that must be [`PorkChildStatus::Running`] before
-    /// this process is spawned. All names must be registered with the same
+    /// this process is spawned. Dependencies are specified using [`Self::depends_on`]
+    /// or [`Self::depends_on_all`]. All names must be registered with the same
     /// [`crate::orchestrator::ProcessOrchestrator`].
     pub(crate) depends_on: Vec<String>,
 }

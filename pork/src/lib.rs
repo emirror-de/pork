@@ -154,12 +154,62 @@
 //! }
 //! ```
 //!
+//! # Process dependencies and startup ordering
+//!
+//! You can declare that a process should only start after other processes have
+//! reached the `Running` state using the [`spec::ProcessSpec::depends_on`] and
+//! [`spec::ProcessSpec::depends_on_all`] builder methods.
+//!
+//! The orchestrator will:
+//! - wait for all declared dependencies to reach `Running` status before spawning the process
+//! - detect and reject dependency cycles with [`error::OrchestratorError::DependencyCycle`]
+//! - time out if dependencies don't reach `Running` within the configured timeout,
+//!   returning [`error::OrchestratorError::DependencyTimeout`]
+//!
+//! ```no_run
+//! use pork::orchestrator::ProcessOrchestrator;
+//! use pork::spec::ProcessSpec;
+//! use pork::error::OrchestratorError;
+//!
+//! fn main() -> Result<(), OrchestratorError> {
+//!     let orchestrator = ProcessOrchestrator::new();
+//!
+//!     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should build");
+//!     runtime.block_on(async {
+//!         // Start a database process first
+//!         let _db = orchestrator
+//!             .start_process(
+//!                 ProcessSpec::new("./db-binary")
+//!                     .managed_name("database"),
+//!             )
+//!             .await?;
+//!
+//!         // Start a worker that waits for the database to be ready
+//!         let _worker = orchestrator
+//!             .start_process(
+//!                 ProcessSpec::new("./worker-binary")
+//!                     .managed_name("worker")
+//!                     .depends_on("database"),
+//!             )
+//!             .await?;
+//!
+//!         Ok::<(), OrchestratorError>(())
+//!     })?;
+//!     Ok(())
+//! }
+//! ```
+//!
 //! # API guide
 //!
 //! - [`orchestrator::ProcessOrchestrator`] manages child lifecycle and process lookup.
-//! - [`spec::ProcessSpec`] configures how a child process is started.
+//! - [`spec::ProcessSpec`] configures how a child process is started, including process
+//!   dependencies via [`spec::ProcessSpec::depends_on`] and [`spec::ProcessSpec::depends_on_all`].
 //! - [`orchestrator::ManagedChild`] provides a handle for messaging and child identity.
 //! - [`child::bootstrap::child_connect_from_env`] and [`child::bootstrap::child_connect`] are the async child-side bootstrap helpers.
+//! - [`error::OrchestratorError`] defines error types including dependency-related errors:
+//!   [`error::OrchestratorError::DependencyCycle`],
+//!   [`error::OrchestratorError::DependencyTimeout`], and
+//!   [`error::OrchestratorError::DependencyNotFound`].
 //! - The companion `pork-proto` crate contains the shared control-plane contract and
 //!   codec marker types.
 #![deny(missing_docs)]
