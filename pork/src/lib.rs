@@ -102,7 +102,7 @@
 //!
 //! - **Host-side** (requires `host` feature):
 //!   - [`orchestrator::ProcessOrchestrator`]: main entry point for managing child processes
-//!   - [`orchestrator::managed_child::ManagedChild`]: handle to a running child process
+//!   - [`types::ManagedChild`]: handle to a running child process
 //!   - [`host::HostBootstrap`]: low-level host bootstrap coordination
 //!
 //! - **Child-side** (requires `client` feature):

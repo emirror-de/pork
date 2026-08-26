@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use pork::error::{OrchestratorError, Result};
 use pork::orchestrator::ProcessOrchestrator;
-use pork::orchestrator::managed_child::ManagedChild;
 use pork::spec::ProcessSpec;
+use pork::types::ManagedChild;
 use pork::types::ManagedChildName;
 use pork_comms::{ChildMessage, HostMessage, decode_message, encode_message};
 use pork_proto::protocol::PorkControlCodec;

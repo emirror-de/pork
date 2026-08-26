@@ -2,8 +2,8 @@
 use pork::error::OrchestratorError;
 #[cfg(feature = "host")]
 use pork::orchestrator::ProcessOrchestrator;
-use pork::orchestrator::managed_child::ManagedChildIdentity;
 use pork::spec::ProcessSpec;
+use pork::types::ManagedChildIdentity;
 use pork::types::{BootstrapEnvName, ManagedChildName, ProcessId};
 use pork::{CONTROL_BOOTSTRAP_ENV, DEFAULT_BOOTSTRAP_ENV};
 use pork_proto::protocol::PorkControlCodec;

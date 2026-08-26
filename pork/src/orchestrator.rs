@@ -1,6 +1,3 @@
-/// Managed child process handles and child-facing interaction types.
-pub mod managed_child;
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
@@ -11,13 +8,13 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use pork_proto::protocol::{PorkChildStatus, PorkControlMessage, PorkStatusUpdate};
 
-use self::managed_child::ManagedChild;
 use crate::error::{OrchestratorError, Result};
 #[cfg(feature = "host")]
 use crate::host::HostBootstrap;
 #[cfg(feature = "host")]
 use crate::host::channels::{HostControlSender, HostDataSender};
 use crate::spec::ProcessSpec;
+use crate::types::ManagedChild;
 use crate::types::{ControlPayload, DataPayload, ManagedChildName, ProcessId};
 use pork_proto::protocol::{PORK_CONTROL_CODEC_ENV, PorkControlCodec};
 
