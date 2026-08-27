@@ -425,6 +425,7 @@ pub struct ManagedChild {
 }
 
 impl ManagedChild {
+    #[cfg(feature = "host")]
     pub(crate) fn new(
         process_id: ProcessId,
         name: Option<ManagedChildName>,

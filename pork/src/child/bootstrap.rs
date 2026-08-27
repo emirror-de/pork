@@ -305,7 +305,13 @@ fn spawn_control_worker(
 mod tests {
     use std::time::Duration;
 
+    use pork_proto::protocol::PorkProtoCodecError;
+
     use super::*;
+
+    fn test_control_codec() -> Option<PorkControlCodec> {
+        PorkControlCodec::available().into_iter().next()
+    }
 
     #[test]
     fn child_bootstrap_new_creates_instance() {
@@ -359,8 +365,8 @@ mod tests {
             Err(error) => panic!("control channel should be created: {error}"),
         };
         let (_data_queue, data_worker) = spawn_data_worker(data_receiver, 1);
-        let (mut control_queue, control_worker) =
-            spawn_control_worker(control_receiver, PorkControlCodec::Json, 1);
+        let codec = test_control_codec().unwrap_or(PorkControlCodec::Json);
+        let (mut control_queue, control_worker) = spawn_control_worker(control_receiver, codec, 1);
 
         if let Err(error) = data_sender.send(vec![1]) {
             panic!("first data message should be sent: {error}");
@@ -369,17 +375,26 @@ mod tests {
             panic!("second data message should be sent: {error}");
         }
 
-        let restart = match PorkControlCodec::Json.encode_restart() {
-            Ok(message) => message,
-            Err(error) => panic!("restart should be encoded: {error}"),
+        let payload = match test_control_codec() {
+            Some(codec) => match codec.encode_restart() {
+                Ok(message) => message,
+                Err(error) => panic!("restart should be encoded: {error}"),
+            },
+            None => b"control".to_vec(),
         };
-        if let Err(error) = control_sender.send(restart) {
-            panic!("restart should be sent: {error}");
+        if let Err(error) = control_sender.send(payload) {
+            panic!("control payload should be sent: {error}");
         }
 
         let received = tokio::time::timeout(Duration::from_secs(1), control_queue.recv()).await;
-        match received {
-            Ok(Some(Ok(PorkControlMessage::Restart))) => {}
+        match (test_control_codec(), received) {
+            (Some(_), Ok(Some(Ok(PorkControlMessage::Restart)))) => {}
+            (
+                None,
+                Ok(Some(Err(OrchestratorError::ControlCodec(
+                    PorkProtoCodecError::UnsupportedCodec,
+                )))),
+            ) => {}
             other => panic!("control worker should remain responsive: {other:?}"),
         }
 
@@ -393,24 +408,36 @@ mod tests {
             Ok(channels) => channels,
             Err(error) => panic!("control channel should be created: {error}"),
         };
-        let (mut queue, worker) = spawn_control_worker(receiver, PorkControlCodec::Json, 2);
+        let codec = test_control_codec().unwrap_or(PorkControlCodec::Json);
+        let (mut queue, worker) = spawn_control_worker(receiver, codec, 2);
 
         if let Err(error) = sender.send(b"invalid".to_vec()) {
             panic!("invalid payload should reach the worker: {error}");
         }
-        let restart = match PorkControlCodec::Json.encode_restart() {
-            Ok(message) => message,
-            Err(error) => panic!("restart should be encoded: {error}"),
+        let payload = match test_control_codec() {
+            Some(codec) => match codec.encode_restart() {
+                Ok(message) => message,
+                Err(error) => panic!("restart should be encoded: {error}"),
+            },
+            None => b"still-unsupported".to_vec(),
         };
-        if let Err(error) = sender.send(restart) {
-            panic!("restart should be sent: {error}");
+        if let Err(error) = sender.send(payload) {
+            panic!("control payload should be sent: {error}");
         }
 
         assert!(matches!(queue.recv().await, Some(Err(_))));
-        assert!(matches!(
-            queue.recv().await,
-            Some(Ok(PorkControlMessage::Restart))
-        ));
+        match test_control_codec() {
+            Some(_) => assert!(matches!(
+                queue.recv().await,
+                Some(Ok(PorkControlMessage::Restart))
+            )),
+            None => assert!(matches!(
+                queue.recv().await,
+                Some(Err(OrchestratorError::ControlCodec(
+                    PorkProtoCodecError::UnsupportedCodec
+                )))
+            )),
+        }
 
         worker.abort();
     }
