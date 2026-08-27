@@ -1,7 +1,9 @@
 use pork_proto::protocol::{
-    PorkChildStatus, PorkControlCodec, PorkControlMessage, PorkIpcMessage, PorkProtoCodecError,
-    PorkStatusUpdate,
+    PorkControlCodec, PorkControlMessage, PorkIpcMessage, PorkProtoCodecError,
 };
+
+#[cfg(any(feature = "codec-json", feature = "codec-postcard"))]
+use pork_proto::protocol::{PorkChildStatus, PorkStatusUpdate};
 
 #[test]
 fn pork_ipc_message_control_helpers_expose_control_payload() {
