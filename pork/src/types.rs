@@ -41,11 +41,6 @@ impl From<ProcessId> for u64 {
 pub struct ManagedChildName(String);
 
 impl ManagedChildName {
-    /// Creates a managed child name from an owned string.
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
     /// Returns the managed name as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
