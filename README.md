@@ -87,7 +87,7 @@ If you are browsing locally, the crate-level docs are the best starting point be
 
 You need:
 
-- Rust toolchain (this workspace targets Rust `1.86`)
+- Rust toolchain (this workspace targets Rust `1.89`)
 - Cargo
 - Unix-like local IPC support for the current process model
 - Optional: Nix with flakes enabled if you want the provided development shell
@@ -209,8 +209,8 @@ cargo deny check
 MSRV (verify compilation on minimum supported Rust)
 
 ```sh
-rustup toolchain install 1.86.0
-rustup run 1.86.0 cargo check --workspace
+rustup toolchain install 1.89.0
+rustup run 1.89.0 cargo check --workspace
 ```
 
 Nix-based validation
@@ -270,7 +270,7 @@ CI is defined in `.github/workflows/ci.yml` and runs the following gates on PRs 
 - all-features and all-targets tests (`cargo test --workspace --all-features --all-targets`)
 - feature-matrix checks for `pork` and `pork-proto`
 - documentation tests (`cargo test --workspace --all-features --doc`)
-- MSRV compile check (Rust 1.86)
+- MSRV compile check (Rust 1.89)
 - security and license checks (`cargo audit`, `cargo deny check`)
 - `nix flake check`
 
