@@ -12,8 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let channels = ChildBootstrap::from_default_env()?.connect().await?;
     let control_codec = channels.control_codec();
     let mut handled_messages = 0_usize;
-    let mut status_reporter =
-        StatusReporter::new(channels.control_sender(), HEARTBEAT_INTERVAL);
+    let mut status_reporter = StatusReporter::new(channels.control_sender(), HEARTBEAT_INTERVAL);
 
     status_reporter.start().await?;
     status_reporter.set_status(PorkChildStatus::Running).await;
