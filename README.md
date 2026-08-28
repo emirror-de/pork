@@ -33,7 +33,7 @@ This keeps the workspace root focused on coordination while each crate owns its 
 
 A typical setup has two sides:
 
-1. A **host** process creates a `pork::orchestrator::ProcessOrchestrator` and starts a child from a `pork::spec::ProcessSpec`.
+1. A **host** process creates a `pork::orchestrator::ProcessOrchestrator` and starts a child from a `pork::orchestrator::spec::ProcessSpec`.
 2. A **child** process reads bootstrap information from the environment and connects back to the host with `pork::child::bootstrap`.
 3. Both sides exchange typed `pork::types::DataPayload` values through `pork`.
 4. Shared control messages, encoded `pork::types::ControlPayload` values, typed IPC envelopes, and codec selection live in `pork_proto::protocol`.
@@ -65,7 +65,7 @@ The orchestrator reads those values when spawning the child, and `ChildBootstrap
 expects both bootstrap variable names. In the common case, use the default `ProcessSpecBuilder`
 settings on the host and `ChildBootstrap::from_default_env()` on the child.
 
-See `pork/src/host.rs` for `HostBootstrap` and `pork/src/child/bootstrap.rs` for `ChildBootstrap` documentation.
+See `pork/src/orchestrator.rs`, `pork/src/orchestrator/spec.rs`, and `pork/src/child/bootstrap.rs` for the primary API documentation.
 
 ## Where to look next
 
@@ -73,7 +73,7 @@ For the actual API, examples, and behavior details, use the crate documentation:
 
 - `pork` crate docs: see `pork/src/lib.rs`
   - `pork::orchestrator` for host-side process management
-  - `pork::spec` for child process configuration
+  - `pork::orchestrator::spec` for child process configuration
   - `pork::child::bootstrap` for child-side bootstrap helpers
 - `pork-proto` crate docs: see `pork-proto/src/lib.rs`
   - `pork_proto::protocol` for protocol models, shared control messages, and typed IPC envelopes
@@ -123,7 +123,7 @@ cargo test --workspace --all-features --all-targets
 
 A typical workflow has three parts:
 
-1. define how the child process should be started with `pork::spec::ProcessSpec`
+1. define how the child process should be started with `pork::orchestrator::spec::ProcessSpec`
 2. start and manage the child from `pork::orchestrator::ProcessOrchestrator`
 3. connect from the child side with `pork::child::bootstrap::ChildBootstrap`
 
@@ -140,7 +140,7 @@ Host side sketch:
 
 ```rust
 use pork::orchestrator::ProcessOrchestrator;
-use pork::spec::ProcessSpec;
+use pork::orchestrator::spec::ProcessSpec;
 
 async fn run_host() -> Result<(), pork::error::OrchestratorError> {
     let orchestrator = ProcessOrchestrator::new();

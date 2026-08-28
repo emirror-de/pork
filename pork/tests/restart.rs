@@ -9,7 +9,7 @@ use pork::DEFAULT_BOOTSTRAP_ENV;
 use pork::child::bootstrap::ChildBootstrap;
 use pork::error::OrchestratorError;
 use pork::orchestrator::ProcessOrchestrator;
-use pork::spec::ProcessSpec;
+use pork::orchestrator::spec::ProcessSpec;
 use pork::types::ManagedChild;
 use pork::types::ManagedChildName;
 use pork_proto::protocol::{PorkChildStatus, PorkControlCodec, PorkControlMessage};

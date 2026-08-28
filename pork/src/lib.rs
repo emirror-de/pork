@@ -36,7 +36,7 @@
 //! # #[cfg(feature = "host")]
 //! # {
 //! use pork::orchestrator::ProcessOrchestrator;
-//! use pork::spec::ProcessSpec;
+//! use pork::orchestrator::spec::ProcessSpec;
 //!
 //! // Configure host-side orchestration timeouts before spawning children.
 //! let orchestrator = ProcessOrchestrator::builder()
@@ -102,8 +102,8 @@
 //!
 //! - **Host-side** (requires `host` feature):
 //!   - [`orchestrator::ProcessOrchestrator`]: main entry point for managing child processes
+//!   - [`orchestrator::spec::ProcessSpec`] and [`orchestrator::spec::ProcessSpecBuilder`]: child process configuration
 //!   - [`types::ManagedChild`]: handle to a running child process
-//!   - [`host::HostBootstrap`]: low-level host bootstrap coordination
 //!
 //! - **Child-side** (requires `client` feature):
 //!   - [`child::bootstrap::ChildBootstrap`]: struct-based child bootstrap API
@@ -111,7 +111,6 @@
 //!     independent receive workers and bounded queues
 //!
 //! - **Shared**:
-//!   - [`spec::ProcessSpec`] and [`spec::ProcessSpecBuilder`]: child process configuration
 //!   - [`error::OrchestratorError`]: error types
 //!
 //! If neither `host` nor `client` is enabled, only shared types are available.
@@ -127,14 +126,12 @@
 pub mod child;
 /// Error types and convenience aliases used by the orchestration API.
 pub mod error;
-/// Host-side bootstrap coordination (pure sequential dual-channel strategy).
+/// Internal host-side bootstrap coordination (pure sequential dual-channel strategy).
 #[cfg(feature = "host")]
-pub mod host;
+pub(crate) mod host;
 /// Host-side process lifecycle management.
 #[cfg(feature = "host")]
 pub mod orchestrator;
-/// Child process configuration types and builders.
-pub mod spec;
 /// Strongly typed domain values used across the public API.
 pub mod types;
 

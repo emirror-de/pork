@@ -7,7 +7,7 @@ use pork::DEFAULT_BOOTSTRAP_ENV;
 use pork::child::bootstrap::ChildBootstrap;
 use pork::error::OrchestratorError;
 use pork::orchestrator::ProcessOrchestrator;
-use pork::spec::ProcessSpec;
+use pork::orchestrator::spec::ProcessSpec;
 use pork::types::ManagedChild;
 use pork::types::ManagedChildName;
 use pork_proto::protocol::{PorkControlCodec, PorkControlMessage};
@@ -98,16 +98,14 @@ async fn process_starts_when_dependency_is_already_running() {
 
     let dependent = match orchestrator
         .start_process(
-            pork::spec::ProcessSpec::builder(
-                dep_child_spec("dep-consumer-ready").executable().clone(),
-            )
-            .arg("--exact")
-            .arg("dep_test_child_entrypoint")
-            .arg("--nocapture")
-            .managed_name("dep-consumer-ready")
-            .control_codec(PorkControlCodec::Json)
-            .depends_on("dep-provider-ready")
-            .build(),
+            ProcessSpec::builder(dep_child_spec("dep-consumer-ready").executable().clone())
+                .arg("--exact")
+                .arg("dep_test_child_entrypoint")
+                .arg("--nocapture")
+                .managed_name("dep-consumer-ready")
+                .control_codec(PorkControlCodec::Json)
+                .depends_on("dep-provider-ready")
+                .build(),
         )
         .await
     {
@@ -131,7 +129,7 @@ async fn start_process_returns_dependency_not_found_for_unknown_name() {
 
     let result = orchestrator
         .start_process(
-            pork::spec::ProcessSpec::builder(dep_child_spec("needs-ghost").executable().clone())
+            ProcessSpec::builder(dep_child_spec("needs-ghost").executable().clone())
                 .arg("--exact")
                 .arg("dep_test_child_entrypoint")
                 .arg("--nocapture")
@@ -180,16 +178,14 @@ async fn start_process_returns_dependency_timeout_when_dep_not_ready_in_time() {
 
     let result = orchestrator
         .start_process(
-            pork::spec::ProcessSpec::builder(
-                dep_child_spec("waits-for-slow-dep").executable().clone(),
-            )
-            .arg("--exact")
-            .arg("dep_test_child_entrypoint")
-            .arg("--nocapture")
-            .managed_name("waits-for-slow-dep")
-            .control_codec(PorkControlCodec::Json)
-            .depends_on("slow-dep")
-            .build(),
+            ProcessSpec::builder(dep_child_spec("waits-for-slow-dep").executable().clone())
+                .arg("--exact")
+                .arg("dep_test_child_entrypoint")
+                .arg("--nocapture")
+                .managed_name("waits-for-slow-dep")
+                .control_codec(PorkControlCodec::Json)
+                .depends_on("slow-dep")
+                .build(),
         )
         .await;
 
@@ -269,7 +265,7 @@ async fn start_process_returns_dependency_cycle_for_self_dependency() {
     // visible to the cycle-check DFS.
     let result = fresh
         .start_process(
-            pork::spec::ProcessSpec::builder(dep_child_spec("cycle-self").executable().clone())
+            ProcessSpec::builder(dep_child_spec("cycle-self").executable().clone())
                 .arg("--exact")
                 .arg("dep_test_child_entrypoint")
                 .arg("--nocapture")
@@ -293,7 +289,7 @@ async fn start_process_returns_dependency_cycle_for_self_dependency() {
 /// returns them in declaration order.
 #[test]
 fn process_spec_depends_on_all_and_accessor() {
-    let spec = pork::spec::ProcessSpec::builder("child-binary")
+    let spec = ProcessSpec::builder("child-binary")
         .depends_on("alpha")
         .depends_on_all(["beta", "gamma"])
         .build();
@@ -311,7 +307,7 @@ fn process_spec_depends_on_all_and_accessor() {
 /// A freshly constructed `ProcessSpec` has an empty `depends_on` list.
 #[test]
 fn process_spec_depends_on_defaults_to_empty() {
-    let spec = pork::spec::ProcessSpec::builder("child-binary").build();
+    let spec = ProcessSpec::builder("child-binary").build();
     assert!(spec.dependencies_ref().is_empty());
 }
 

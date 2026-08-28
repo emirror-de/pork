@@ -1,3 +1,5 @@
+pub mod spec;
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
@@ -8,12 +10,12 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use pork_proto::protocol::{PorkChildStatus, PorkControlMessage, PorkStatusUpdate};
 
+use self::spec::ProcessSpec;
 use crate::error::{OrchestratorError, Result};
 #[cfg(feature = "host")]
 use crate::host::HostBootstrap;
 #[cfg(feature = "host")]
 use crate::host::channels::{HostControlSender, HostDataSender};
-use crate::spec::ProcessSpec;
 use crate::types::ManagedChild;
 use crate::types::{ControlPayload, DataPayload, ManagedChildName, ProcessId};
 use pork_proto::protocol::{PORK_CONTROL_CODEC_ENV, PorkControlCodec};
@@ -71,8 +73,8 @@ async fn configure_process_output(
     command: &mut tokio::process::Command,
 ) -> Result<()> {
     match &spec.output {
-        crate::spec::ProcessOutput::Inherit => {}
-        crate::spec::ProcessOutput::Capture { stdout, stderr } => {
+        self::spec::ProcessOutput::Inherit => {}
+        self::spec::ProcessOutput::Capture { stdout, stderr } => {
             if *stdout {
                 command.stdout(Stdio::piped());
             }
@@ -80,7 +82,7 @@ async fn configure_process_output(
                 command.stderr(Stdio::piped());
             }
         }
-        crate::spec::ProcessOutput::Log { stdout, stderr } => {
+        self::spec::ProcessOutput::Log { stdout, stderr } => {
             if let Some(path) = stdout {
                 command.stdout(Stdio::from(open_append_log(path.as_path()).await?));
             }

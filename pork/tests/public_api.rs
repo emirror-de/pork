@@ -2,10 +2,15 @@
 use pork::error::OrchestratorError;
 #[cfg(feature = "host")]
 use pork::orchestrator::ProcessOrchestrator;
-use pork::spec::ProcessSpec;
+#[cfg(feature = "host")]
+use pork::orchestrator::spec::ProcessSpec;
+#[cfg(feature = "host")]
+use pork::types::BootstrapEnvName;
 use pork::types::ManagedChildIdentity;
-use pork::types::{BootstrapEnvName, ManagedChildName, ProcessId};
+use pork::types::{ManagedChildName, ProcessId};
+#[cfg(feature = "host")]
 use pork::{CONTROL_BOOTSTRAP_ENV, DEFAULT_BOOTSTRAP_ENV};
+#[cfg(feature = "host")]
 use pork_proto::protocol::PorkControlCodec;
 
 #[cfg(feature = "host")]
@@ -57,6 +62,7 @@ fn managed_child_identity_accessors_are_predictable() {
     assert!(!unnamed.has_name());
 }
 
+#[cfg(feature = "host")]
 #[test]
 fn process_spec_exposes_configured_fields_through_accessors() {
     let spec = ProcessSpec::builder("/usr/bin/example-child")
@@ -120,6 +126,7 @@ fn process_spec_exposes_configured_fields_through_accessors() {
     );
 }
 
+#[cfg(feature = "host")]
 #[test]
 fn process_spec_defaults_are_predictable_and_documented() {
     let spec = ProcessSpec::builder("child-binary").build();
@@ -148,6 +155,7 @@ fn process_spec_defaults_are_predictable_and_documented() {
     assert!(spec.dependencies_ref().is_empty());
 }
 
+#[cfg(feature = "host")]
 #[test]
 fn process_spec_output_capture_helpers_toggle_both_streams() {
     let captured = ProcessSpec::builder("child-binary")
@@ -163,6 +171,7 @@ fn process_spec_output_capture_helpers_toggle_both_streams() {
     assert!(!uncaptured.captures_stderr());
 }
 
+#[cfg(feature = "host")]
 #[test]
 fn process_spec_log_output_uses_one_append_target_for_both_streams() {
     let logged = ProcessSpec::builder("child-binary")
@@ -188,6 +197,7 @@ fn process_spec_log_output_uses_one_append_target_for_both_streams() {
     assert!(inherited.stderr_log_ref().is_none());
 }
 
+#[cfg(feature = "host")]
 #[test]
 fn process_spec_without_managed_name_clears_previous_value() {
     let spec = ProcessSpec::builder("child-binary")

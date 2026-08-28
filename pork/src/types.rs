@@ -261,7 +261,7 @@ impl From<&str> for BootstrapEnvName {
     }
 }
 
-/// Child executable path used by a [`crate::spec::ProcessSpec`].
+/// Child executable path used by a [`crate::orchestrator::spec::ProcessSpec`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessExecutable(PathBuf);
 
@@ -385,7 +385,7 @@ type SharedManagedChildReceiver = Arc<AsyncMutex<ManagedChildReceiverStream>>;
 /// Stable identity of a managed child process.
 ///
 /// This bundles the numeric process id assigned by the orchestrator with the
-/// optional managed name configured in [`crate::spec::ProcessSpec`].
+/// optional managed name configured in [`crate::orchestrator::spec::ProcessSpec`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManagedChildIdentity<'a> {
     /// Stable process identifier assigned by the orchestrator.
