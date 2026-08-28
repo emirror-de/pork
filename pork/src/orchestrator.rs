@@ -302,11 +302,9 @@ impl ProcessOrchestrator {
         if start_result.is_err()
             && reserve_name
             && let Some(process_name) = &managed_name
-        {
-            if let Ok(mut process_names) = self.inner.process_names.try_write() {
+            && let Ok(mut process_names) = self.inner.process_names.try_write() {
                 process_names.remove(process_name);
             }
-        }
 
         start_result
     }
