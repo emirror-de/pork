@@ -83,9 +83,9 @@ impl std::error::Error for OrchestratorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::Ipc(error) => Some(error),
             Self::ControlCodec(error) => Some(error),
-            Self::ProcessNotFound(_)
+            Self::Ipc(_)
+            | Self::ProcessNotFound(_)
             | Self::ProcessNameNotFound(_)
             | Self::DuplicateProcessName(_)
             | Self::MissingBootstrapEnv(_)
