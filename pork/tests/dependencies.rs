@@ -1,4 +1,8 @@
-#![cfg(all(feature = "client", feature = "host"))]
+#![cfg(all(
+    feature = "client",
+    feature = "host",
+    any(feature = "codec-json", feature = "codec-postcard")
+))]
 
 use std::env;
 use std::time::Duration;
@@ -16,6 +20,13 @@ use pork_proto::protocol::{PorkControlCodec, PorkControlMessage};
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+fn test_control_codec() -> PorkControlCodec {
+    match PorkControlCodec::available().into_iter().next() {
+        Some(codec) => codec,
+        None => panic!("dependency integration tests require at least one control codec"),
+    }
+}
+
 fn dep_child_spec(name: impl Into<ManagedChildName>) -> ProcessSpec {
     let executable = match env::current_exe() {
         Ok(path) => path,
@@ -27,7 +38,7 @@ fn dep_child_spec(name: impl Into<ManagedChildName>) -> ProcessSpec {
         .arg("dep_test_child_entrypoint")
         .arg("--nocapture")
         .managed_name(name)
-        .control_codec(PorkControlCodec::Json)
+        .control_codec(test_control_codec())
         .build()
 }
 
@@ -103,7 +114,7 @@ async fn process_starts_when_dependency_is_already_running() {
                 .arg("dep_test_child_entrypoint")
                 .arg("--nocapture")
                 .managed_name("dep-consumer-ready")
-                .control_codec(PorkControlCodec::Json)
+                .control_codec(test_control_codec())
                 .depends_on("dep-provider-ready")
                 .build(),
         )
@@ -134,7 +145,7 @@ async fn start_process_returns_dependency_not_found_for_unknown_name() {
                 .arg("dep_test_child_entrypoint")
                 .arg("--nocapture")
                 .managed_name("needs-ghost")
-                .control_codec(PorkControlCodec::Json)
+                .control_codec(test_control_codec())
                 .depends_on("ghost-process")
                 .build(),
         )
@@ -183,7 +194,7 @@ async fn start_process_returns_dependency_timeout_when_dep_not_ready_in_time() {
                 .arg("dep_test_child_entrypoint")
                 .arg("--nocapture")
                 .managed_name("waits-for-slow-dep")
-                .control_codec(PorkControlCodec::Json)
+                .control_codec(test_control_codec())
                 .depends_on("slow-dep")
                 .build(),
         )
@@ -270,7 +281,7 @@ async fn start_process_returns_dependency_cycle_for_self_dependency() {
                 .arg("dep_test_child_entrypoint")
                 .arg("--nocapture")
                 .managed_name("cycle-self")
-                .control_codec(PorkControlCodec::Json)
+                .control_codec(test_control_codec())
                 .depends_on("cycle-self")
                 .build(),
         )

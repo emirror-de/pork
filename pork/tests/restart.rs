@@ -1,4 +1,8 @@
-#![cfg(all(feature = "client", feature = "host"))]
+#![cfg(all(
+    feature = "client",
+    feature = "host",
+    any(feature = "codec-json", feature = "codec-postcard")
+))]
 
 use std::env;
 use std::io::Write;
@@ -19,6 +23,13 @@ const RESTART_TEST_CHILD_NAME: &str = "restart-test-child";
 const STUBBORN_TEST_CHILD_NAME: &str = "stubborn-test-child";
 const LOGGED_TEST_CHILD_NAME: &str = "logged-test-child";
 
+fn test_control_codec() -> PorkControlCodec {
+    match PorkControlCodec::available().into_iter().next() {
+        Some(codec) => codec,
+        None => panic!("restart integration tests require at least one control codec"),
+    }
+}
+
 fn current_exe_spec() -> ProcessSpec {
     let executable = match env::current_exe() {
         Ok(path) => path,
@@ -31,7 +42,7 @@ fn current_exe_spec() -> ProcessSpec {
         .arg("--nocapture")
         .env(CHILD_MODE_ENV, "cooperative")
         .managed_name(RESTART_TEST_CHILD_NAME)
-        .control_codec(PorkControlCodec::Json)
+        .control_codec(test_control_codec())
         .build()
 }
 
@@ -47,7 +58,7 @@ fn stubborn_exe_spec() -> ProcessSpec {
         .arg("--nocapture")
         .env(CHILD_MODE_ENV, "stubborn")
         .managed_name(STUBBORN_TEST_CHILD_NAME)
-        .control_codec(PorkControlCodec::Json)
+        .control_codec(test_control_codec())
         .build()
 }
 
@@ -63,7 +74,7 @@ fn logged_exe_spec(path: &Path) -> ProcessSpec {
         .arg("--nocapture")
         .env(CHILD_MODE_ENV, "logged")
         .managed_name(LOGGED_TEST_CHILD_NAME)
-        .control_codec(PorkControlCodec::Json)
+        .control_codec(test_control_codec())
         .log_output(path)
         .build()
 }
