@@ -31,6 +31,8 @@ pub enum OrchestratorError {
     UnsupportedControlCodec(String),
     /// The configured control codec could not encode or decode a control message.
     ControlCodec(PorkProtoCodecError),
+    /// Timed out waiting for a child process to finish bootstrap and connect.
+    StartupTimeout(ProcessId),
     /// Timed out waiting for a child process to shut down gracefully.
     GracefulShutdownTimeout(ProcessId),
     /// Timed out waiting for one or more dependencies to become ready.
@@ -64,6 +66,12 @@ impl fmt::Display for OrchestratorError {
                 write!(f, "unsupported control codec: {value}")
             }
             Self::ControlCodec(error) => write!(f, "control codec error: {error}"),
+            Self::StartupTimeout(process_id) => {
+                write!(
+                    f,
+                    "timed out waiting for process {process_id} to finish startup"
+                )
+            }
             Self::GracefulShutdownTimeout(process_id) => {
                 write!(f, "timed out waiting for process {process_id} to shut down")
             }
@@ -92,6 +100,7 @@ impl std::error::Error for OrchestratorError {
             | Self::MissingBootstrapValue
             | Self::MissingControlCodec
             | Self::UnsupportedControlCodec(_)
+            | Self::StartupTimeout(_)
             | Self::GracefulShutdownTimeout(_)
             | Self::DependencyTimeout(_)
             | Self::UnknownDependency(_)

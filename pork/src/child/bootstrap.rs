@@ -7,8 +7,12 @@ use crate::error::{OrchestratorError, Result};
 use crate::types::{BootstrapEnvName, DataPayload};
 use crate::{CONTROL_BOOTSTRAP_ENV, DEFAULT_BOOTSTRAP_ENV};
 use pork_proto::protocol::{
-    PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkControlCodec, PorkControlMessage,
+    PORK_CONTROL_CODEC_ENV, ParsePorkControlCodecError, PorkChildStatus, PorkControlCodec,
+    PorkControlMessage,
 };
+/// Environment variable name used to pass the orchestrator-managed heartbeat
+/// interval, in milliseconds, from the host to a managed child during bootstrap.
+pub const PORK_HEARTBEAT_INTERVAL_ENV: &str = "PORK_HEARTBEAT_INTERVAL_MS";
 
 const DATA_QUEUE_CAPACITY: usize = 1024;
 const CONTROL_QUEUE_CAPACITY: usize = 16;
@@ -86,7 +90,7 @@ pub struct ChildBootstrapChannels {
     data_receiver: AsyncMutex<mpsc::Receiver<Vec<u8>>>,
     control_sender: ControlSender,
     control_receiver: AsyncMutex<mpsc::Receiver<ControlQueueItem>>,
-    worker_handles: [JoinHandle<()>; 2],
+    worker_handles: Vec<JoinHandle<()>>,
 }
 
 impl ChildBootstrapChannels {
@@ -134,9 +138,14 @@ impl ChildBootstrapChannels {
         }
     }
 
-    /// Returns a cloneable sender for periodic status reporting or other control traffic.
-    pub fn control_sender(&self) -> ControlSender {
-        self.control_sender.clone()
+    /// Publishes one lifecycle status update to the host immediately.
+    pub fn report_status(&self, status: PorkChildStatus) -> Result<()> {
+        self.send_control(PorkControlMessage::StatusUpdate(
+            pork_proto::protocol::PorkStatusUpdate {
+                status,
+                timestamp_ms: current_time_ms(),
+            },
+        ))
     }
 
     /// Returns the control codec negotiated with the host.
@@ -228,13 +237,19 @@ impl ChildBootstrap {
             control_codec,
             CONTROL_QUEUE_CAPACITY,
         );
+        let control_sender = ControlSender::new(channels.control_sender, control_codec);
+        let mut worker_handles = vec![data_worker, control_worker];
+
+        if let Some(interval) = heartbeat_interval_from_env()? {
+            worker_handles.push(spawn_heartbeat_worker(control_sender.clone(), interval));
+        }
 
         Ok(ChildBootstrapChannels {
             data_sender: channels.data_sender,
             data_receiver: AsyncMutex::new(data_receiver),
-            control_sender: ControlSender::new(channels.control_sender, control_codec),
+            control_sender,
             control_receiver: AsyncMutex::new(control_receiver),
-            worker_handles: [data_worker, control_worker],
+            worker_handles,
         })
     }
 }
@@ -299,6 +314,58 @@ fn spawn_control_worker(
         }
     });
     (queue, handle)
+}
+
+fn heartbeat_interval_from_env() -> Result<Option<std::time::Duration>> {
+    let Some(value) = std::env::var_os(PORK_HEARTBEAT_INTERVAL_ENV) else {
+        return Ok(None);
+    };
+
+    let value = value.into_string().map_err(|_| {
+        OrchestratorError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "heartbeat interval env var must be valid utf-8",
+        ))
+    })?;
+    let millis = value.parse::<u64>().map_err(|error| {
+        OrchestratorError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid heartbeat interval milliseconds: {error}"),
+        ))
+    })?;
+
+    Ok(Some(std::time::Duration::from_millis(millis)))
+}
+
+fn spawn_heartbeat_worker(
+    control_sender: ControlSender,
+    interval: std::time::Duration,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.tick().await;
+
+        loop {
+            ticker.tick().await;
+            let update = pork_proto::protocol::PorkStatusUpdate {
+                status: PorkChildStatus::Running,
+                timestamp_ms: current_time_ms(),
+            };
+            if control_sender
+                .send(PorkControlMessage::StatusUpdate(update))
+                .is_err()
+            {
+                break;
+            }
+        }
+    })
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

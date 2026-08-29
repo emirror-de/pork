@@ -74,8 +74,7 @@ fn process_spec_exposes_configured_fields_through_accessors() {
         .envs([("PORK_REGION", "local"), ("PORK_LOG_LEVEL", "debug")])
         .data_bootstrap_env("CUSTOM_DATA_BOOTSTRAP_ENV")
         .control_bootstrap_env("CUSTOM_CONTROL_BOOTSTRAP_ENV")
-        .capture_stdout(true)
-        .capture_stderr(true)
+        .with_heartbeat()
         .depends_on("upstream-service")
         .depends_on_all(["database", "cache"])
         .build();
@@ -114,8 +113,9 @@ fn process_spec_exposes_configured_fields_through_accessors() {
         spec.control_bootstrap_env_ref(),
         &BootstrapEnvName::from("CUSTOM_CONTROL_BOOTSTRAP_ENV")
     );
-    assert!(spec.captures_stdout());
-    assert!(spec.captures_stderr());
+    assert!(!spec.captures_stdout());
+    assert!(!spec.captures_stderr());
+    assert!(spec.heartbeat_interval_ref().is_some());
     assert_eq!(
         spec.dependencies_ref(),
         [
@@ -157,25 +157,8 @@ fn process_spec_defaults_are_predictable_and_documented() {
 
 #[cfg(feature = "host")]
 #[test]
-fn process_spec_output_capture_helpers_toggle_both_streams() {
-    let captured = ProcessSpec::builder("child-binary")
-        .capture_output()
-        .build();
-    assert!(captured.captures_stdout());
-    assert!(captured.captures_stderr());
-
-    let uncaptured = ProcessSpec::builder("child-binary")
-        .inherit_output()
-        .build();
-    assert!(!uncaptured.captures_stdout());
-    assert!(!uncaptured.captures_stderr());
-}
-
-#[cfg(feature = "host")]
-#[test]
 fn process_spec_log_output_uses_one_append_target_for_both_streams() {
     let logged = ProcessSpec::builder("child-binary")
-        .capture_output()
         .log_output("/tmp/pork-child.log")
         .build();
 

@@ -20,11 +20,12 @@ use crate::types::ManagedChild;
 use crate::types::{ControlPayload, DataPayload, ManagedChildName, ProcessId};
 use pork_proto::protocol::{PORK_CONTROL_CODEC_ENV, PorkControlCodec};
 
-const DEFAULT_MESSAGE_BUFFER_SIZE: usize = 1024;
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default time the orchestrator waits for declared dependencies to reach
 /// [`PorkChildStatus::Running`] before returning [`OrchestratorError::DependencyTimeout`].
 const DEFAULT_DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default time the orchestrator waits for a child to complete bootstrap.
+const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Interval between dependency-readiness polls while waiting.
 const DEPENDENCY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -44,6 +45,8 @@ struct OrchestratorInner {
     graceful_shutdown_timeout: Duration,
     /// Maximum time to wait for declared dependencies to reach `Running`.
     dependency_timeout: Duration,
+    /// Maximum time to wait for a spawned child to complete bootstrap.
+    startup_timeout: Duration,
     processes: tokio::sync::RwLock<HashMap<ProcessId, ProcessEntry>>,
     process_names: tokio::sync::RwLock<HashMap<ManagedChildName, ProcessId>>,
 }
@@ -111,7 +114,7 @@ impl Default for ProcessOrchestrator {
 }
 
 impl ProcessOrchestrator {
-    /// Creates an orchestrator with the default buffer size and graceful-shutdown timeout.
+    /// Creates an orchestrator with the default startup, dependency, and graceful-shutdown timeouts.
     pub fn new() -> Self {
         Self::builder().build()
     }
@@ -130,6 +133,12 @@ impl ProcessOrchestrator {
     /// to reach [`PorkChildStatus::Running`].
     pub fn dependency_timeout(&self) -> Duration {
         self.inner.dependency_timeout
+    }
+
+    /// Returns the default timeout used when waiting for a spawned child to
+    /// finish bootstrap.
+    pub fn startup_timeout(&self) -> Duration {
+        self.inner.startup_timeout
     }
 
     /// Starts a new managed child process from the given [`ProcessSpec`].
@@ -222,7 +231,10 @@ impl ProcessOrchestrator {
         }
 
         let start_result = async {
-            let (bootstrap_env, servers) = HostBootstrap::create_servers().await?;
+            let (mut bootstrap_env, servers) = HostBootstrap::create_servers().await?;
+            bootstrap_env.heartbeat_interval_ms = spec
+                .heartbeat_interval_ref()
+                .map(|interval| interval.as_duration().as_millis() as u64);
 
             let mut command = tokio::process::Command::new(spec.executable.as_path());
             command.args(&spec.args);
@@ -244,7 +256,20 @@ impl ProcessOrchestrator {
             configure_process_output(&spec, &mut command).await?;
 
             let child = Arc::new(tokio::sync::Mutex::new(command.spawn()?));
-            let channels = HostBootstrap::accept_connections(servers).await?;
+            let channels = match tokio::time::timeout(
+                self.inner.startup_timeout,
+                HostBootstrap::accept_connections(servers),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    let mut child_guard = child.lock().await;
+                    let _ = child_guard.start_kill();
+                    let _ = child_guard.wait().await;
+                    return Err(OrchestratorError::StartupTimeout(process_id));
+                }
+            };
 
             let data_sender = channels.data_sender;
             let data_receiver = channels.data_receiver;
@@ -434,6 +459,7 @@ impl ProcessOrchestrator {
 
     /// Returns the current lifecycle status of the managed process identified by `process_id`.
     pub async fn process_status(&self, process_id: ProcessId) -> Result<PorkChildStatus> {
+        let _ = self.reconcile_unexpected_exit(process_id).await?;
         let processes = self.inner.processes.read().await;
         let entry = processes
             .get(&process_id)
@@ -447,6 +473,7 @@ impl ProcessOrchestrator {
     /// returned timestamp is the time recorded by the child when it generated
     /// the update.
     pub async fn child_status(&self, process_id: ProcessId) -> Result<Option<PorkStatusUpdate>> {
+        let _ = self.reconcile_unexpected_exit(process_id).await?;
         let child_reported_status = {
             let processes = self.inner.processes.read().await;
             processes
@@ -606,6 +633,27 @@ impl ProcessOrchestrator {
         Ok(child.wait().await?)
     }
 
+    async fn reconcile_unexpected_exit(&self, process_id: ProcessId) -> Result<Option<ExitStatus>> {
+        let child = match self.child_handle(process_id).await {
+            Ok(child) => child,
+            Err(OrchestratorError::ProcessNotFound(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+
+        let status = {
+            let mut child = child.lock().await;
+            child.try_wait()?
+        };
+
+        match status {
+            Some(status) => self
+                .finish_process_shutdown(process_id, status)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
     async fn child_handle(
         &self,
         process_id: ProcessId,
@@ -638,48 +686,61 @@ impl ProcessOrchestrator {
 
     /// Looks up a managed process id by name.
     pub async fn process_id_by_name(&self, name: &ManagedChildName) -> Result<Option<ProcessId>> {
-        let process_names = self.inner.process_names.read().await;
-        Ok(process_names.get(name).copied())
+        let process_id = {
+            let process_names = self.inner.process_names.read().await;
+            process_names.get(name).copied()
+        };
+
+        if let Some(process_id) = process_id {
+            if self.reconcile_unexpected_exit(process_id).await?.is_some() {
+                return Ok(None);
+            }
+        }
+
+        Ok(process_id)
     }
 
     /// Returns `true` when a managed process with the given name exists.
     pub async fn has_process_name(&self, name: &ManagedChildName) -> Result<bool> {
-        let process_names = self.inner.process_names.read().await;
-        Ok(process_names.contains_key(name))
+        Ok(self.process_id_by_name(name).await?.is_some())
     }
 
     /// Returns the managed names currently registered with the orchestrator.
     pub async fn process_names(&self) -> Result<Vec<ManagedChildName>> {
-        let process_names = self.inner.process_names.read().await;
-        Ok(process_names.keys().cloned().collect())
+        let names = {
+            let process_names = self.inner.process_names.read().await;
+            process_names.keys().cloned().collect::<Vec<_>>()
+        };
+
+        let mut active = Vec::new();
+        for name in names {
+            if self.has_process_name(&name).await? {
+                active.push(name);
+            }
+        }
+        Ok(active)
     }
 }
 
 /// Builder for configuring a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
 pub struct ProcessOrchestratorBuilder {
-    message_buffer_size: usize,
     graceful_shutdown_timeout: Duration,
     dependency_timeout: Duration,
+    startup_timeout: Duration,
 }
 
 impl Default for ProcessOrchestratorBuilder {
     fn default() -> Self {
         Self {
-            message_buffer_size: DEFAULT_MESSAGE_BUFFER_SIZE,
             graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
             dependency_timeout: DEFAULT_DEPENDENCY_TIMEOUT,
+            startup_timeout: DEFAULT_STARTUP_TIMEOUT,
         }
     }
 }
 
 impl ProcessOrchestratorBuilder {
-    /// Sets the size of the async buffer used for inbound child messages.
-    pub fn message_buffer_size(mut self, value: usize) -> Self {
-        self.message_buffer_size = value;
-        self
-    }
-
     /// Sets the default timeout used for graceful shutdown operations.
     pub fn graceful_shutdown_timeout(mut self, value: Duration) -> Self {
         self.graceful_shutdown_timeout = value;
@@ -693,6 +754,13 @@ impl ProcessOrchestratorBuilder {
         self
     }
 
+    /// Sets the default timeout used when waiting for a spawned child to
+    /// complete bootstrap and connect.
+    pub fn startup_timeout(mut self, value: Duration) -> Self {
+        self.startup_timeout = value;
+        self
+    }
+
     /// Builds a [`ProcessOrchestrator`] from the current builder configuration.
     pub fn build(self) -> ProcessOrchestrator {
         ProcessOrchestrator {
@@ -700,6 +768,7 @@ impl ProcessOrchestratorBuilder {
                 next_process_id: AtomicU64::new(ProcessId::new(1).get()),
                 graceful_shutdown_timeout: self.graceful_shutdown_timeout,
                 dependency_timeout: self.dependency_timeout,
+                startup_timeout: self.startup_timeout,
                 processes: tokio::sync::RwLock::new(HashMap::new()),
                 process_names: tokio::sync::RwLock::new(HashMap::new()),
             }),

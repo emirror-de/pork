@@ -301,42 +301,7 @@ impl ProcessSpecBuilder {
         self
     }
 
-    /// Enables or disables stdout capture for the child process.
-    pub fn capture_stdout(mut self, value: bool) -> Self {
-        let stderr = match &self.spec.output {
-            ProcessOutput::Capture { stderr, .. } => *stderr,
-            _ => false,
-        };
-        self.spec.output = ProcessOutput::Capture {
-            stdout: value,
-            stderr,
-        };
-        self
-    }
-
-    /// Enables or disables stderr capture for the child process.
-    pub fn capture_stderr(mut self, value: bool) -> Self {
-        let stdout = match &self.spec.output {
-            ProcessOutput::Capture { stdout, .. } => *stdout,
-            _ => false,
-        };
-        self.spec.output = ProcessOutput::Capture {
-            stdout,
-            stderr: value,
-        };
-        self
-    }
-
-    /// Enables both stdout and stderr capture.
-    pub fn capture_output(mut self) -> Self {
-        self.spec.output = ProcessOutput::Capture {
-            stdout: true,
-            stderr: true,
-        };
-        self
-    }
-
-    /// Restores inherited stdout and stderr instead of capturing or logging them.
+    /// Restores inherited stdout and stderr instead of logging them.
     pub fn inherit_output(mut self) -> Self {
         self.spec.output = ProcessOutput::Inherit;
         self

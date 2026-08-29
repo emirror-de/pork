@@ -22,6 +22,7 @@ const CHILD_MODE_ENV: &str = "PORK_RESTART_TEST_MODE";
 const RESTART_TEST_CHILD_NAME: &str = "restart-test-child";
 const STUBBORN_TEST_CHILD_NAME: &str = "stubborn-test-child";
 const LOGGED_TEST_CHILD_NAME: &str = "logged-test-child";
+const NONSTARTING_TEST_CHILD_NAME: &str = "nonstarting-test-child";
 
 fn test_control_codec() -> PorkControlCodec {
     match PorkControlCodec::available().into_iter().next() {
@@ -76,6 +77,22 @@ fn logged_exe_spec(path: &Path) -> ProcessSpec {
         .managed_name(LOGGED_TEST_CHILD_NAME)
         .control_codec(test_control_codec())
         .log_output(path)
+        .build()
+}
+
+fn nonstarting_exe_spec() -> ProcessSpec {
+    let executable = match env::current_exe() {
+        Ok(path) => path,
+        Err(error) => panic!("current test executable path should be available: {error}"),
+    };
+
+    ProcessSpec::builder(executable)
+        .arg("--exact")
+        .arg("restart_test_child_entrypoint")
+        .arg("--nocapture")
+        .env(CHILD_MODE_ENV, "nonstarting")
+        .managed_name(NONSTARTING_TEST_CHILD_NAME)
+        .control_codec(test_control_codec())
         .build()
 }
 
@@ -404,6 +421,54 @@ async fn graceful_shutdown_timeout_force_kills_and_cleans_up_stubborn_child() {
     ));
 }
 
+#[tokio::test]
+async fn start_process_timeout_kills_partial_child_and_cleans_up_name_registration() {
+    let orchestrator = ProcessOrchestrator::builder()
+        .startup_timeout(Duration::from_millis(100))
+        .build();
+
+    let result = orchestrator.start_process(nonstarting_exe_spec()).await;
+
+    assert!(matches!(result, Err(OrchestratorError::StartupTimeout(_))));
+    assert_eq!(
+        orchestrator
+            .process_id_by_name(&ManagedChildName::from(NONSTARTING_TEST_CHILD_NAME))
+            .await
+            .ok()
+            .flatten(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn unexpected_child_exit_is_reconciled_on_lookup() {
+    let orchestrator = ProcessOrchestrator::new();
+    let child = orchestrator
+        .start_process(current_exe_spec())
+        .await
+        .unwrap_or_else(|error| panic!("child should start: {error}"));
+    let _ = recv_utf8(&child).await;
+
+    child
+        .send(b"exit-now".to_vec())
+        .unwrap_or_else(|error| panic!("send should succeed: {error}"));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert!(matches!(
+        orchestrator.process_status(child.process_id()).await,
+        Err(OrchestratorError::ProcessNotFound(id)) if id == child.process_id()
+    ));
+    assert_eq!(
+        orchestrator
+            .process_id_by_name(&ManagedChildName::from(RESTART_TEST_CHILD_NAME))
+            .await
+            .ok()
+            .flatten(),
+        None
+    );
+}
+
 #[test]
 fn restart_test_child_entrypoint() {
     if env::var(DEFAULT_BOOTSTRAP_ENV).is_err() {
@@ -443,6 +508,11 @@ fn restart_test_child_entrypoint() {
             return;
         }
 
+        if mode == "nonstarting" {
+            std::future::pending::<()>().await;
+            return;
+        }
+
         loop {
             tokio::select! {
                 control = channels.recv_control() => match control {
@@ -463,8 +533,10 @@ fn restart_test_child_entrypoint() {
                     Err(error) => panic!("child should decode control messages: {error}"),
                 },
                 message = channels.recv_data() => {
-                    if message.is_none() {
-                        break;
+                    match message {
+                        Some(message) if message.as_ref() == b"exit-now" => break,
+                        Some(_) => {}
+                        None => break,
                     }
                 }
             }

@@ -34,6 +34,8 @@ pub struct BootstrapEnv {
     pub data_server_name: String,
     /// Server name for the control-channel bootstrap handshake.
     pub control_server_name: String,
+    /// Optional heartbeat interval in milliseconds declared by the orchestrator.
+    pub heartbeat_interval_ms: Option<u64>,
 }
 
 impl BootstrapEnv {
@@ -47,6 +49,13 @@ impl BootstrapEnv {
         command
             .env(data_env_name, &self.data_server_name)
             .env(control_env_name, &self.control_server_name);
+
+        if let Some(heartbeat_interval_ms) = self.heartbeat_interval_ms {
+            command.env(
+                crate::child::bootstrap::PORK_HEARTBEAT_INTERVAL_ENV,
+                heartbeat_interval_ms.to_string(),
+            );
+        }
     }
 }
 
@@ -89,6 +98,7 @@ impl HostBootstrap {
             BootstrapEnv {
                 data_server_name: data_name,
                 control_server_name: control_name,
+                heartbeat_interval_ms: None,
             },
             HostBootstrapServerPair {
                 data_server,
@@ -144,6 +154,7 @@ mod tests {
         let env = BootstrapEnv {
             data_server_name: "data_server_test".to_string(),
             control_server_name: "control_server_test".to_string(),
+            heartbeat_interval_ms: None,
         };
 
         assert_eq!(env.data_server_name, "data_server_test");
@@ -155,6 +166,7 @@ mod tests {
         let env = BootstrapEnv {
             data_server_name: "data".to_string(),
             control_server_name: "control".to_string(),
+            heartbeat_interval_ms: None,
         };
         let env_cloned = env.clone();
         assert_eq!(env.data_server_name, env_cloned.data_server_name);
@@ -165,6 +177,7 @@ mod tests {
         let env = BootstrapEnv {
             data_server_name: "test_data_server".to_string(),
             control_server_name: "test_control_server".to_string(),
+            heartbeat_interval_ms: Some(5_000),
         };
 
         let mut cmd = tokio::process::Command::new("true");
@@ -186,6 +199,7 @@ mod tests {
         let env = BootstrapEnv {
             data_server_name: "data".to_string(),
             control_server_name: "control".to_string(),
+            heartbeat_interval_ms: None,
         };
         let debug_str = format!("{:?}", env);
         assert!(debug_str.contains("data"));
