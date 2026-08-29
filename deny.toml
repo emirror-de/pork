@@ -21,11 +21,11 @@ allow = [
 
 [[advisories.ignore]]
 # atomic-polyfill is flagged as unmaintained (RUSTSEC-2023-0089). It is
-# reachable transitively via postcard -> heapless -> atomic-polyfill in the
-# current dependency tree. There is no safe upstream upgrade available at the
-# moment. Suppress this advisory while tracking a follow-up to migrate to a
-# maintained alternative (for example: portable-atomic) or to update the
-# dependency that pulls it in.
+# reachable transitively only through the optional Postcard codec path
+# postcard -> heapless -> atomic-polyfill in the current dependency tree.
+# There is no safe upstream upgrade available at the moment. Suppress this
+# advisory while tracking a follow-up to migrate to a maintained alternative
+# such as portable-atomic, or to update the dependency that pulls it in.
 id = "RUSTSEC-2023-0089"
 reason = "atomic-polyfill is unmaintained but reachable only via postcard/heapless; no safe upgrade available; plan: consider replacing postcard/heapless or use portable-atomic as upstream permits."
 

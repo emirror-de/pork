@@ -129,10 +129,11 @@ A typical workflow has three parts:
 
 For a complete typed example, see `examples/pork-comms/`.
 
-For heartbeat-based child status reporting, combine `ChildBootstrap` with
-`pork::child::status_reporter::StatusReporter` in the child process and query the latest
-child-reported status from the host with `ProcessOrchestrator::child_status` or
-`ProcessOrchestrator::child_status_by_name`.
+For heartbeat-based child status reporting, configure heartbeat on the host-side
+`ProcessSpec`, let bootstrap propagate that fixed interval automatically, and query the
+latest child-reported status from the host with `ProcessOrchestrator::child_status` or
+`ProcessOrchestrator::child_status_by_name`. Child code should report meaningful lifecycle
+transitions rather than constructing heartbeat scheduling manually.
 
 ## Quick example workflow
 
@@ -178,7 +179,7 @@ async fn run_child() -> Result<(), pork::error::OrchestratorError> {
 
 ## Validate locally
 
-Run these checks before making a release or merging large changes. These match what CI enforces.
+Run these checks before making a release or merging large changes. These match what CI enforces. When available, prefer the `nix develop -c` variants because they are the canonical repository workflow.
 
 Formatting and lints
 
@@ -194,6 +195,8 @@ cargo test --workspace
 cargo test --workspace --doc
 cargo test --workspace --all-features --all-targets
 ```
+
+Production-readiness notes also live in `docs/production-readiness.md`.
 
 Security & license checks
 
@@ -221,7 +224,7 @@ nix flake check
 
 ## Security and license checks
 
-This repository uses `cargo-audit` and `cargo-deny` to enforce advisories and license policies in CI. The cargo-deny configuration lives at `deny.toml` (root of the `pork/` workspace). CI runs `cargo audit` and `cargo deny check` as part of the `security` job; run the same commands locally before releasing.
+This repository uses `cargo-audit` and `cargo-deny` to enforce advisories and license policies in CI. The cargo-deny configuration lives at `deny.toml` in the workspace root. CI runs `cargo audit` and `cargo deny check` as part of the `security` job; run the same commands locally before releasing.
 
 The `deny.toml` file also contains any temporary advisory suppressions that have been reviewed and accepted with a plan to remediate (for example, a transitive unmaintained crate that currently has no safe upgrade path). Treat suppressions as temporary and track follow-up work to remove them.
 

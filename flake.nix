@@ -38,14 +38,14 @@
         };
         inherit (pkgs) lib;
 
-        # Use nightly Rust toolchain and include wasm target via fenix.packages.${system}
+        # Use the workspace's stable Rust 1.98 toolchain via fenix.
         rustToolchain =
           let
             fp = fenix.packages.${system};
           in
           fp.combine [
-            fp.latest.toolchain
-            fp.latest.rust-analyzer
+            fp.stable.toolchain
+            fp.stable.rust-analyzer
           ];
 
         src = lib.cleanSourceWith {
@@ -75,9 +75,9 @@
           buildCommand = ''
             mkdir -p $out
             cp ${./README.md} $out/README.md
-            cp ${./pork/CHANGELOG.md} $out/CHANGELOG.md
-            cp ${./pork/LICENSE-MIT} $out/LICENSE-MIT
-            cp ${./pork/LICENSE-APACHE} $out/LICENSE-APACHE
+            cp ${./CHANGELOG.md} $out/CHANGELOG.md
+            cp ${./LICENSE-MIT} $out/LICENSE-MIT
+            cp ${./LICENSE-APACHE} $out/LICENSE-APACHE
           '';
         };
 
@@ -89,13 +89,13 @@
 
         cargoClippyCheck = pkgs.runCommand "cargo-clippy-check" toolchainEnv ''
           export HOME=$TMPDIR
-          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
           touch $out
         '';
 
         cargoTestCheck = pkgs.runCommand "cargo-test-check" toolchainEnv ''
           export HOME=$TMPDIR
-          cargo test --workspace --all-targets
+          cargo test --workspace
           touch $out
         '';
 

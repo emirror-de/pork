@@ -25,8 +25,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust (stable) with rustfmt and clippy
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (1.98.0) with rustfmt and clippy
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
 
@@ -45,7 +45,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy check (workspace)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Unit tests (workspace)
         run: cargo test --workspace
@@ -85,8 +85,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (1.98.0)
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Cache cargo/target
         uses: actions/cache@v4
@@ -110,8 +110,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (1.98.0)
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Cache cargo/target
         uses: actions/cache@v4
@@ -160,8 +160,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (1.98.0)
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Cache cargo/target
         uses: actions/cache@v4
