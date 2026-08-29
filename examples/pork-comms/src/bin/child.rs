@@ -1,26 +1,18 @@
-use std::time::Duration;
-
 use pork::child::bootstrap::ChildBootstrap;
-use pork::child::status_reporter::StatusReporter;
 use pork_comms::{ChildMessage, HostMessage, decode_message, encode_message};
 use pork_proto::protocol::{PorkChildStatus, PorkControlCodec, PorkControlMessage};
-
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let channels = ChildBootstrap::from_default_env()?.connect().await?;
     let control_codec = channels.control_codec();
     let mut handled_messages = 0_usize;
-    let mut status_reporter = StatusReporter::new(channels.control_sender(), HEARTBEAT_INTERVAL);
 
-    status_reporter.start().await?;
-    status_reporter.set_status(PorkChildStatus::Running).await;
+    channels.report_status(PorkChildStatus::Running)?;
 
     println!(
-        "child: connected to host with control codec {} and {}s heartbeats",
+        "child: connected to host with control codec {}",
         control_codec.as_env_value(),
-        HEARTBEAT_INTERVAL.as_secs()
     );
 
     channels.send_data(encode_message(
@@ -35,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             control = channels.recv_control() => {
                 match control? {
                     Some(PorkControlMessage::GracefulShutdown | PorkControlMessage::Restart) => {
-                        status_reporter.set_status(PorkChildStatus::Stopping).await;
+                        channels.report_status(PorkChildStatus::Stopping)?;
                         break;
                     }
                     Some(PorkControlMessage::StatusUpdate(_)) => {}
@@ -75,7 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    status_reporter.stop().await;
     println!("child: exiting cleanly");
     Ok(())
 }

@@ -29,8 +29,8 @@ async fn main() -> Result<()> {
         .start_process(
             ProcessSpec::builder(child_binary)
                 .managed_name(CHILD_MANAGED_NAME)
-                .capture_output()
                 .control_codec(control_codec)
+                .enable_heartbeat(Duration::from_secs(1))
                 .build(),
         )
         .await?;
